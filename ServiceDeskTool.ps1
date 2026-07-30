@@ -31,7 +31,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "1.0.0"
+$global:AppVersion    = "1.0.1"
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
 $global:ReportsPath   = Join-Path $global:BasePath  "Relatorios"
@@ -41,9 +41,10 @@ $global:PrinterConfigFile = Join-Path $global:ConfigPath "printers_config.json"
 $global:PrinterCacheFile  = Join-Path $global:BasePath   "printers_cache.json"
 $global:LogFile       = Join-Path $global:BasePath   "servicedesk.log"
 
-# URL fixa (GitHub Releases) para checagem de nova versao.
-$global:UpdateVersionUrl = "https://raw.githubusercontent.com/Dan-Vaz/elgin-service-desk-tool/master/version.json"
-$global:UpdateReleaseUrl = "https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/latest"
+# URLs fixas (GitHub Releases) para checagem e download automatico de atualizacao.
+$global:UpdateVersionUrl     = "https://raw.githubusercontent.com/Dan-Vaz/elgin-service-desk-tool/master/version.json"
+$global:UpdateReleaseUrl     = "https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/latest"
+$global:UpdateAssetUrlFormat = "https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v{0}/ServiceDeskTool.exe"
 
 $global:IsAdmin       = $false
 $global:HasWinget     = $false
@@ -335,7 +336,7 @@ function Invoke-ConsoleCommand {
 }
 
 # ==============================================================================
-# CHECAGEM DE ATUALIZACAO (sem auto-substituir o exe em execucao — so avisa)
+# CHECAGEM E APLICACAO DE ATUALIZACAO
 # ==============================================================================
 function Test-NewVersionAvailable {
     if ($NoUpdateCheck) { return $null }
@@ -344,6 +345,70 @@ function Test-NewVersionAvailable {
         if ($resp.Version -and ([version]$resp.Version -gt [version]$global:AppVersion)) { return $resp.Version }
     } catch { Write-Log -Message ("Checagem de atualizacao falhou (normal se offline): {0}" -f $_.Exception.Message) -Level "WARN" }
     return $null
+}
+
+# Baixa o .exe da nova versao e agenda a substituicao/reabertura via um pequeno
+# helper .cmd (nao .ps1 — evita ExecutionPolicy Bypass, que e o padrao que
+# antivirus/Netskope costumam flagar). O helper espera este processo fechar,
+# copia o novo exe por cima do atual e reabre a ferramenta.
+function Invoke-SelfUpdate {
+    param([Parameter(Mandatory=$true)][string]$NewVersion)
+
+    $selfExe = Get-SelfExecutablePath
+    if (-not $selfExe) {
+        Show-Info "Atualizacao automatica so funciona na versao compilada (.exe). Abrindo a pagina de download."
+        Start-Process $global:UpdateReleaseUrl
+        return
+    }
+
+    $downloadUrl = [string]::Format($global:UpdateAssetUrlFormat, $NewVersion)
+    $tempExe = Join-Path $env:TEMP ("ServiceDeskTool_v{0}.exe" -f $NewVersion)
+
+    try {
+        Set-Status ("Baixando atualizacao v{0}..." -f $NewVersion)
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $prev = $ProgressPreference; $ProgressPreference = "SilentlyContinue"
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $tempExe -UseBasicParsing -ErrorAction Stop
+        $ProgressPreference = $prev
+        if (-not (Test-Path $tempExe) -or (Get-Item $tempExe).Length -lt 51200) {
+            throw "Arquivo baixado com tamanho suspeito (possivel bloqueio de proxy)."
+        }
+    } catch {
+        Write-Log -Message ("[UPDATE] Falha ao baixar v{0}: {1}" -f $NewVersion,$_.Exception.Message) -Level "ERROR"
+        Show-Warning "Falha ao baixar a atualizacao automaticamente.`n`nAbrindo a pagina de download manual."
+        Start-Process $global:UpdateReleaseUrl
+        if (Test-Path $tempExe) { Remove-Item $tempExe -Force -ErrorAction SilentlyContinue }
+        return
+    }
+
+    $currentPid = $PID
+    $helperPath = Join-Path $env:TEMP ("sdtool_update_{0}.cmd" -f [guid]::NewGuid().ToString("N").Substring(0,8))
+    $helperBody = @"
+@echo off
+set /a tries=0
+:wait
+set /a tries+=1
+if %tries% GTR 60 goto giveup
+tasklist /FI "PID eq $currentPid" 2>NUL | find "$currentPid" >NUL
+if not errorlevel 1 (
+    ping 127.0.0.1 -n 2 >NUL
+    goto wait
+)
+:giveup
+copy /y "$tempExe" "$selfExe" >NUL
+del "$tempExe" >NUL 2>&1
+start "" "$selfExe"
+del "%~f0"
+"@
+    Set-Content -Path $helperPath -Value $helperBody -Encoding ASCII
+
+    Write-Log -Message ("[UPDATE] Atualizacao v{0} baixada. Fechando para aplicar." -f $NewVersion) -Level "SUCCESS"
+    Start-Process -FilePath $helperPath -WindowStyle Hidden | Out-Null
+
+    Show-Info ("Atualizacao v{0} baixada. A ferramenta vai fechar e reabrir automaticamente." -f $NewVersion)
+    [System.Windows.Forms.Application]::Exit()
+    Start-Sleep -Milliseconds 300
+    [Environment]::Exit(0)
 }
 
 # ==============================================================================
@@ -1341,8 +1406,8 @@ function Show-MainForm {
         else { Set-Status "Pronto." }
         $novaVersao = Test-NewVersionAvailable
         if ($novaVersao) {
-            if (Confirm-Action ("Uma nova versao (v{0}) esta disponivel. Deseja abrir a pagina de download?" -f $novaVersao) "Atualizacao disponivel") {
-                Start-Process $global:UpdateReleaseUrl
+            if (Confirm-Action ("Uma nova versao (v{0}) esta disponivel. Deseja atualizar agora?`n`nA ferramenta vai fechar e reabrir automaticamente com a nova versao." -f $novaVersao) "Atualizacao disponivel") {
+                Invoke-SelfUpdate -NewVersion $novaVersao
             }
         }
     })
