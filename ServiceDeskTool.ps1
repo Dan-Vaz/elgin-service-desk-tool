@@ -42,7 +42,7 @@ $global:PrinterCacheFile  = Join-Path $global:BasePath   "printers_cache.json"
 $global:LogFile       = Join-Path $global:BasePath   "servicedesk.log"
 
 # URL fixa (GitHub Releases) para checagem de nova versao.
-$global:UpdateVersionUrl = "https://raw.githubusercontent.com/Dan-Vaz/elgin-service-desk-tool/main/version.json"
+$global:UpdateVersionUrl = "https://raw.githubusercontent.com/Dan-Vaz/elgin-service-desk-tool/master/version.json"
 $global:UpdateReleaseUrl = "https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/latest"
 
 $global:IsAdmin       = $false
