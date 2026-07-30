@@ -24,7 +24,15 @@ O `.bat` sempre busca e executa a versão mais recente do script (hospedado num 
 O arquivo fonte é [ServiceDeskTool.ps1](ServiceDeskTool.ps1) neste repositório. **Editar aqui não é suficiente** — o que roda de verdade é o conteúdo publicado no Gist referenciado pelo `.bat`. Depois de alterar o script:
 
 ```bash
-gh gist edit <GIST_ID> ServiceDeskTool.ps1
+gh gist edit 91cf3659c455bb69ff32e6c7cb99fa6d ServiceDeskTool.ps1
 ```
 
-Uma nova tag (`vX.Y.Z`) publica um novo `Elgin-Service-Desk-Tool.bat` na aba Releases (o `.bat` em si raramente muda — só a URL do Gist, se ele for recriado).
+Isso já é suficiente para toda mudança de funcionalidade — não é preciso criar uma tag/Release a cada alteração, já que o `.bat` não muda (ele só referencia o Gist, que sempre serve o conteúdo mais recente). Lembre de também atualizar `$global:AppVersion` no topo do script, para o número exibido na janela refletir a mudança.
+
+Só crie uma nova tag (`vX.Y.Z`) quando o **próprio `Elgin-Service-Desk-Tool.bat`** precisar mudar (ex.: trocar de Gist, mudar o texto do launcher) — isso publica um novo `.bat` na aba [Releases](https://github.com/Dan-Vaz/elgin-service-desk-tool/releases).
+
+### Checklist ao alterar o script
+1. Edite `ServiceDeskTool.ps1` e bump `$global:AppVersion`.
+2. `git add ServiceDeskTool.ps1 && git commit -m "..." && git push` (mantém o repositório como histórico/backup).
+3. `gh gist edit 91cf3659c455bb69ff32e6c7cb99fa6d ServiceDeskTool.ps1` (isso é o que realmente coloca a mudança no ar).
+4. Teste rodando o `.bat` uma vez para confirmar.

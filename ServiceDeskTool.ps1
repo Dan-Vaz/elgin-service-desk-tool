@@ -1113,6 +1113,7 @@ $script:MainWindowXaml = @'
                 <StackPanel DockPanel.Dock="Top" Margin="22,26,0,20">
                     <TextBlock Text="Elgin" Foreground="White" FontSize="20" FontWeight="Bold"/>
                     <TextBlock Text="Service Desk Tool" Foreground="#6B7280" FontSize="12"/>
+                    <TextBlock x:Name="TxtVersaoSidebar" Text="" Foreground="#4B5563" FontSize="10" Margin="0,4,0,0"/>
                 </StackPanel>
                 <StackPanel DockPanel.Dock="Top" Margin="0,10,0,0">
                     <Button x:Name="NavInstalar"  Content="Instalar Aplicativos" Style="{StaticResource SidebarButton}" Background="#232326" Foreground="White" Tag="3,0,0,0"/>
@@ -1219,6 +1220,8 @@ function Show-MainWindow {
     $reader = [System.Xml.XmlNodeReader]::new([xml]$script:MainWindowXaml)
     $window = [System.Windows.Markup.XamlReader]::Load($reader)
     $global:MainWindow = $window
+    $window.Title = "{0} v{1}" -f $global:AppName,$global:AppVersion
+    $window.FindName("TxtVersaoSidebar").Text = "v{0}" -f $global:AppVersion
     $global:StatusLabel = $window.FindName("TxtStatus")
     $global:LogTextBox  = $window.FindName("TxtLogs")
 
