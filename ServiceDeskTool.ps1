@@ -1,7 +1,7 @@
 # ==============================================================================
 # Elgin Service Desk Tool
 # Ferramenta online de instalacao, limpeza, diagnostico e suporte para Windows
-# Interface em WPF/XAML — tema escuro moderno.
+# Interface em WPF/XAML - tema escuro moderno.
 #
 # Execucao recomendada via Gist Raw URL (chamado por um .bat de atalho):
 # powershell.exe -NoProfile -STA -Command "`$env:ELGIN_SERVICE_DESK_URL='RAW_URL_DO_GIST'; irm `$env:ELGIN_SERVICE_DESK_URL | iex"
@@ -79,12 +79,6 @@ function Confirm-Action {
     return ([System.Windows.MessageBox]::Show($Message,$Title,[System.Windows.MessageBoxButton]::YesNo,[System.Windows.MessageBoxImage]::Question) -eq [System.Windows.MessageBoxResult]::Yes)
 }
 
-# Substitui Application.DoEvents() (que nao existe em WPF): processa a fila de
-# mensagens pendentes da UI para manter a janela responsiva durante operacoes longas.
-function Invoke-UiPump {
-    if ($null -eq [System.Windows.Threading.Dispatcher]::CurrentDispatcher) { return }
-    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([System.Action]{}, [System.Windows.Threading.DispatcherPriority]::Background) | Out-Null
-}
 
 function Initialize-Folders {
     foreach ($path in @($global:BasePath,$global:ConfigPath,$global:ReportsPath)) {
@@ -121,7 +115,7 @@ function Request-AdminElevation {
     param([string]$Url,[switch]$SilentMode)
     if (Test-IsAdmin) { return $true }
     if ([string]::IsNullOrWhiteSpace($Url)) {
-        Write-Log -Message "[ELEVATE] SourceUrl vazia — nao e possivel montar o comando de elevacao." -Level "ERROR"
+        Write-Log -Message "[ELEVATE] SourceUrl vazia - nao e possivel montar o comando de elevacao." -Level "ERROR"
         return $false
     }
     $message = "Para instalar aplicativos, limpar componentes do Windows, executar reparos e usar o desinstalador avancado, a ferramenta precisa de permissao administrativa.`n`nO Windows exibira a janela oficial do UAC. A ferramenta nao coleta, nao armazena e nao visualiza credenciais.`n`nDeseja reabrir agora como Administrador?"
@@ -149,7 +143,6 @@ function Set-Status {
     param([string]$Text,[ValidateSet("INFO","WARN","ERROR","SUCCESS")][string]$Level="INFO")
     if ($global:StatusLabel -ne $null) { $global:StatusLabel.Text = $Text }
     Write-Log -Message $Text -Level $Level
-    Invoke-UiPump
 }
 
 function Update-SessionPath {
@@ -242,38 +235,39 @@ function Invoke-ManagedProcess {
     Write-Log -Message ("{0}: {1} {2}" -f $Description,$FilePath,$argLine)
     $proc = $null
     try {
+        $quote=[char]34
         $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName               = $FilePath
-        $psi.Arguments              = $argLine
+        $psi.FileName               = $env:ComSpec
+        # Roda atraves do cmd.exe com 2>&1 para mesclar stderr em stdout num
+        # unico pipe — evita o deadlock classico de redirecionamento (ler um
+        # stream ate o fim enquanto o outro, ainda nao lido, enche o buffer e
+        # trava o processo filho). So existe um stream para ler de forma
+        # sincrona depois do processo terminar.
+        $psi.Arguments              = "/d /s /c "+$quote+$quote+$FilePath+$quote+" "+$argLine+" 2>&1"+$quote
         $psi.UseShellExecute        = $false
         $psi.RedirectStandardOutput = $true
-        $psi.RedirectStandardError  = $true
+        $psi.RedirectStandardError  = $false
         $psi.CreateNoWindow         = $true
         $psi.WindowStyle            = [System.Diagnostics.ProcessWindowStyle]::Hidden
         $proc = New-Object System.Diagnostics.Process
         $proc.StartInfo = $psi
         [void]$proc.Start()
-        $outTask = $proc.StandardOutput.ReadToEndAsync()
-        $errTask = $proc.StandardError.ReadToEndAsync()
+        $output = $proc.StandardOutput.ReadToEnd()
+        $errorText = ""
 
-        $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        while (-not $proc.HasExited) {
-            Invoke-UiPump
-            Start-Sleep -Milliseconds 200
-            if ($TimeoutSeconds -gt 0 -and $sw.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
-                try{$proc.Kill()}catch{}
-                $sw.Stop()
-                return [PSCustomObject]@{ExitCode=-999;Output="";Error=("Timeout apos {0}s" -f $TimeoutSeconds)}
-            }
+        # Bloqueia ate o processo terminar ou o timeout estourar. Instalacoes
+        # longas (winget/choco) deixam a janela momentaneamente sem resposta,
+        # mas isso e preferivel a tentar bombear mensagens de dentro de um
+        # Click handler ja em execucao — o que trava indefinidamente.
+        $waitMs = if ($TimeoutSeconds -gt 0) { $TimeoutSeconds * 1000 } else { [int]::MaxValue }
+        $exited = $proc.WaitForExit($waitMs)
+        if (-not $exited) {
+            try{$proc.Kill()}catch{}
+            return [PSCustomObject]@{ExitCode=-999;Output=$output;Error=("Timeout apos {0}s" -f $TimeoutSeconds)}
         }
-        try { $proc.WaitForExit(5000) | Out-Null } catch {}
-        $sw.Stop()
 
-        $output    = try { $outTask.Result } catch { "" }
-        $errorText = try { $errTask.Result } catch { "" }
         $exit      = try { $proc.ExitCode } catch { -1 }
-        if ($output    -and $output.Trim())    { Write-Log -Message $output.Trim() }
-        if ($errorText -and $errorText.Trim()) { Write-Log -Message $errorText.Trim() -Level "WARN" }
+        if ($output -and $output.Trim()) { Write-Log -Message $output.Trim() }
         return [PSCustomObject]@{ExitCode=$exit;Output=$output;Error=$errorText}
     } catch {
         Write-Log -Message ("Falha em {0}: {1}" -f $Description,$_.Exception.Message) -Level "ERROR"
@@ -291,28 +285,26 @@ function Invoke-ConsoleCommand {
         $quote=[char]34
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName               = $env:ComSpec
-        $psi.Arguments              = "/d /s /c "+$quote+$CommandLine+$quote
+        # 2>&1 mescla stderr em stdout NO PROPRIO SHELL — assim so existe UM
+        # pipe redirecionado para o .NET ler, eliminando o deadlock classico
+        # de redirecionamento (ler um stream ate o fim enquanto o outro,
+        # ainda nao lido, enche o buffer e trava o processo filho).
+        $psi.Arguments              = "/d /s /c "+$quote+$CommandLine+" 2>&1"+$quote
         $psi.UseShellExecute        = $false
         $psi.RedirectStandardOutput = $true
-        $psi.RedirectStandardError  = $true
+        $psi.RedirectStandardError  = $false
         $psi.CreateNoWindow         = $true
         $psi.WindowStyle            = [System.Diagnostics.ProcessWindowStyle]::Hidden
         $proc = New-Object System.Diagnostics.Process
         $proc.StartInfo = $psi
         [void]$proc.Start()
-        $outTask=$proc.StandardOutput.ReadToEndAsync()
-        $errTask=$proc.StandardError.ReadToEndAsync()
-        $sw=[System.Diagnostics.Stopwatch]::StartNew()
-        while (-not $proc.HasExited) {
-            Invoke-UiPump; Start-Sleep -Milliseconds 150
-            if ($TimeoutSeconds -gt 0 -and $sw.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
-                try{$proc.Kill()}catch{}
-                $pOut=try{$outTask.Result}catch{""}; $pErr=try{$errTask.Result}catch{""}
-                return [PSCustomObject]@{ExitCode=-999;Output=$pOut;Error=("Timeout apos {0}s`r`n{1}" -f $TimeoutSeconds,$pErr)}
-            }
+        $output = $proc.StandardOutput.ReadToEnd()
+        $errorText = ""
+        $exited = $proc.WaitForExit($TimeoutSeconds * 1000)
+        if (-not $exited) {
+            try{$proc.Kill()}catch{}
+            return [PSCustomObject]@{ExitCode=-999;Output=$output;Error=("Timeout apos {0}s" -f $TimeoutSeconds)}
         }
-        try { $proc.WaitForExit(5000) | Out-Null } catch {}
-        $output=try{$outTask.Result}catch{""}; $errorText=try{$errTask.Result}catch{""}
         $exit=try{$proc.ExitCode}catch{-1}
         if ($output)    { Write-Log -Message $output.Trim() }
         if ($errorText) { Write-Log -Message $errorText.Trim() -Level "WARN" }
@@ -326,7 +318,7 @@ function Invoke-ConsoleCommand {
 }
 
 # ==============================================================================
-# BANCO DE APLICATIVOS (Lista Padrao — Winget / Chocolatey)
+# BANCO DE APLICATIVOS (Lista Padrao - Winget / Chocolatey)
 # ==============================================================================
 function Get-DefaultAppList {
     return @(
@@ -360,7 +352,7 @@ function Import-AppDatabase {
 }
 
 # ==============================================================================
-# PACOTE EXTRA — instaladores hospedados onde a empresa preferir (ex.: GitHub
+# PACOTE EXTRA - instaladores hospedados onde a empresa preferir (ex.: GitHub
 # Releases). Cadastre pela aba "Pacote Extra"; fica salvo em extra_apps.json.
 # ==============================================================================
 function Initialize-ExtraDatabase {
@@ -434,8 +426,8 @@ function Show-AddExtraAppDialog {
         }
         $dlg.DialogResult = $true
         $dlg.Close()
-    })
-    $btnCancelar.Add_Click({ $dlg.DialogResult = $false; $dlg.Close() })
+    }.GetNewClosure())
+    $btnCancelar.Add_Click({ $dlg.DialogResult = $false; $dlg.Close() }.GetNewClosure())
     [void]$dlg.ShowDialog()
     return $script:extraDialogResult
 }
@@ -503,12 +495,8 @@ function Install-DirectApp {
             $proc = Start-Process -FilePath $tempFile -PassThru -ErrorAction Stop
         }
 
-        $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        while ($proc -and -not $proc.HasExited) {
-            Invoke-UiPump
-            Start-Sleep -Milliseconds 400
-            if ($sw.Elapsed.TotalSeconds -gt $timeout) { try{$proc.Kill()}catch{}; Write-Log -Message ("[EXTRA] Timeout em {0}" -f $appName) -Level "ERROR"; return $false }
-        }
+        $exited = $proc.WaitForExit($timeout * 1000)
+        if (-not $exited) { try{$proc.Kill()}catch{}; Write-Log -Message ("[EXTRA] Timeout em {0}" -f $appName) -Level "ERROR"; return $false }
         $exitCode = try { $proc.ExitCode } catch { -1 }
         $ok = ($exitCode -eq 0 -or $exitCode -eq 3010 -or $exitCode -eq 1641)
         if ($ok) { Write-Log -Message ("[EXTRA] {0} instalado com sucesso." -f $appName) -Level "SUCCESS" }
@@ -666,7 +654,7 @@ function Reset-PrintSpooler {
 }
 
 # ==============================================================================
-# IMPRESSORAS DE REDE — consulta o servidor de impressao (spooler) e faz SNMP
+# IMPRESSORAS DE REDE - consulta o servidor de impressao (spooler) e faz SNMP
 # direto no IP de cada impressora para ler nivel de toner/uptime/paginas.
 # So funciona com a maquina conectada a rede/VPN da empresa.
 # ==============================================================================
@@ -724,12 +712,12 @@ function Show-ConfigurarServidorDialog {
         Save-PrinterConfig -ServidorPrint $txtServidor.Text.Trim() -SnmpCommunity $txtComunidade.Text.Trim()
         $dlg.DialogResult = $true
         $dlg.Close()
-    })
-    $dlg.FindName("BtnCancelar").Add_Click({ $dlg.DialogResult = $false; $dlg.Close() })
+    }.GetNewClosure())
+    $dlg.FindName("BtnCancelar").Add_Click({ $dlg.DialogResult = $false; $dlg.Close() }.GetNewClosure())
     [void]$dlg.ShowDialog()
 }
 
-# SNMP puro via UDP (sem dependencias externas) — le toner/uptime/paginas.
+# SNMP puro via UDP (sem dependencias externas) - le toner/uptime/paginas.
 function Get-TonerSNMP {
     param([string]$IP, [int]$Qtd = 1, [string]$Community = "public")
     try {
@@ -1010,7 +998,6 @@ return [PSCustomObject]@{
     foreach ($t in $tasks) {
         $done++
         Set-Status ("Varrendo impressoras... ({0}/{1})" -f $done,$total)
-        Invoke-UiPump
         try {
             $obj = $t.Pipe.EndInvoke($t.Handle) | Select-Object -Last 1
             if ($null -ne $obj) { $resultado += $obj }
@@ -1036,7 +1023,7 @@ function Export-PrintersCsv {
 }
 
 # ==============================================================================
-# INTERFACE (WPF) — tema escuro moderno
+# INTERFACE (WPF) - tema escuro moderno
 # ==============================================================================
 $script:MainWindowXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -1241,7 +1228,10 @@ function Show-MainWindow {
         Impressao = $window.FindName("NavImpressao")
         Logs      = $window.FindName("NavLogs")
     }
-    function Show-Section {
+    # Scriptblock (nao function aninhada) — funcoes definidas dentro de outra
+    # funcao nao ficam visiveis de dentro de closures de eventos WPF (Add_Click),
+    # mas um scriptblock capturado via GetNewClosure() funciona corretamente.
+    $ShowSection = {
         param([string]$Key)
         foreach ($k in $panels.Keys) {
             $panels[$k].Visibility = if ($k -eq $Key) { "Visible" } else { "Collapsed" }
@@ -1249,17 +1239,10 @@ function Show-MainWindow {
             $navButtons[$k].Foreground = if ($k -eq $Key) { Get-Brush "White" } else { Get-Brush "#9CA3AF" }
             $navButtons[$k].Tag = if ($k -eq $Key) { "3,0,0,0" } else { "0" }
         }
-    }
+    }.GetNewClosure()
+
     foreach ($key in $navButtons.Keys) {
-        $navButtons[$key].Add_Click({ Show-Section -Key $this.Content }.GetNewClosure())
-    }
-    # Corrige o Tag usado no clique (usa o texto do botao como chave amigavel -> mapeia para a chave real)
-    $navKeyByContent = @{
-        "Instalar Aplicativos"="Instalar"; "Pacote Extra"="Extra"; "Limpeza"="Limpeza"
-        "Rede"="Rede"; "Impressao"="Impressao"; "Logs"="Logs"
-    }
-    foreach ($key in $navButtons.Keys) {
-        $navButtons[$key].Add_Click({ Show-Section -Key $navKeyByContent[$this.Content] }.GetNewClosure()) 2>$null
+        $navButtons[$key].Add_Click({ & $ShowSection -Key $key }.GetNewClosure())
     }
 
     # ---- Instalar Aplicativos: lista dinamica de checkboxes ----
@@ -1285,7 +1268,7 @@ function Show-MainWindow {
     # ---- Pacote Extra ----
     $spExtra = $window.FindName("SpExtraList")
     $script:extraCheckboxes = @()
-    function Refresh-ExtraList {
+    $RefreshExtraList = {
         $spExtra.Children.Clear()
         $script:extraCheckboxes = @()
         foreach ($app in $global:ExtraAppsList) {
@@ -1295,12 +1278,12 @@ function Show-MainWindow {
             [void]$spExtra.Children.Add($cb)
             $script:extraCheckboxes += $cb
         }
-    }
-    Refresh-ExtraList
+    }.GetNewClosure()
+    & $RefreshExtraList
     $window.FindName("BtnAdicionarExtra").Add_Click({
         $novo = Show-AddExtraAppDialog
-        if ($novo) { [void]$global:ExtraAppsList.Add($novo); Export-ExtraDatabase | Out-Null; Refresh-ExtraList }
-    })
+        if ($novo) { [void]$global:ExtraAppsList.Add($novo); Export-ExtraDatabase | Out-Null; & $RefreshExtraList }
+    }.GetNewClosure())
     $window.FindName("BtnInstalarExtra").Add_Click({
         if (-not $global:IsAdmin) { Show-Warning "Instalacao requer Administrador. Reabra a ferramenta como Admin."; return }
         $selecionados = @($script:extraCheckboxes | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag })
@@ -1309,23 +1292,23 @@ function Show-MainWindow {
         foreach ($app in $selecionados) { $results[$app.Name] = Install-DirectApp -App $app }
         $path = Export-InstallReport -Results $results -Section "PacoteExtra"
         Show-Info ("Instalacao concluida. Relatorio salvo em:`n{0}" -f $path)
-    })
+    }.GetNewClosure())
 
     # ---- Limpeza ----
-    $window.FindName("BtnLimparTemp").Add_Click({ Invoke-CleanupOperation -IncludeWindowsTemp; Show-Info "Temporarios limpos." })
-    $window.FindName("BtnLimparWU").Add_Click({ Clear-WindowsUpdateCache })
-    $window.FindName("BtnLimparGeo").Add_Click({ Clear-GeolocationCache })
+    $window.FindName("BtnLimparTemp").Add_Click({ Invoke-CleanupOperation -IncludeWindowsTemp; Show-Info "Temporarios limpos." }.GetNewClosure())
+    $window.FindName("BtnLimparWU").Add_Click({ Clear-WindowsUpdateCache }.GetNewClosure())
+    $window.FindName("BtnLimparGeo").Add_Click({ Clear-GeolocationCache }.GetNewClosure())
 
     # ---- Rede ----
-    $window.FindName("BtnFlushDns").Add_Click({ Invoke-NetworkTool -Action "Flush DNS" })
-    $window.FindName("BtnRenewIp").Add_Click({ Invoke-NetworkTool -Action "Renew IP" })
-    $window.FindName("BtnWinsock").Add_Click({ Invoke-NetworkTool -Action "Reset Winsock" })
-    $window.FindName("BtnPingGoogle").Add_Click({ Invoke-NetworkTool -Action "Ping Google" })
-    $window.FindName("BtnTesteDns").Add_Click({ Invoke-NetworkTool -Action "Teste DNS" })
+    $window.FindName("BtnFlushDns").Add_Click({ Invoke-NetworkTool -Action "Flush DNS" }.GetNewClosure())
+    $window.FindName("BtnRenewIp").Add_Click({ Invoke-NetworkTool -Action "Renew IP" }.GetNewClosure())
+    $window.FindName("BtnWinsock").Add_Click({ Invoke-NetworkTool -Action "Reset Winsock" }.GetNewClosure())
+    $window.FindName("BtnPingGoogle").Add_Click({ Invoke-NetworkTool -Action "Ping Google" }.GetNewClosure())
+    $window.FindName("BtnTesteDns").Add_Click({ Invoke-NetworkTool -Action "Teste DNS" }.GetNewClosure())
 
     # ---- Impressao ----
-    $window.FindName("BtnSpooler").Add_Click({ Reset-PrintSpooler })
-    $window.FindName("BtnConfigServidor").Add_Click({ Show-ConfigurarServidorDialog })
+    $window.FindName("BtnSpooler").Add_Click({ Reset-PrintSpooler }.GetNewClosure())
+    $window.FindName("BtnConfigServidor").Add_Click({ Show-ConfigurarServidorDialog }.GetNewClosure())
     $dgImpressoras = $window.FindName("DgImpressoras")
     $window.FindName("BtnEscanear").Add_Click({
         $resultado = Get-ImpressorasRede
@@ -1337,13 +1320,13 @@ function Show-MainWindow {
         if ($global:PrintersList.Count -eq 0) { Show-Warning "Nenhuma impressora para exportar. Clique em 'Escanear Rede' primeiro."; return }
         $path = Export-PrintersCsv -Printers @($global:PrintersList)
         Show-Info ("CSV exportado em:`n{0}" -f $path)
-    })
+    }.GetNewClosure())
 
-    Show-Section -Key "Instalar"
+    & $ShowSection -Key "Instalar"
 
     $window.Add_ContentRendered({
         Update-Prerequisites
-        if (-not $global:IsAdmin) { Set-Status "Rodando sem privilegios de administrador — algumas acoes ficarao bloqueadas." "WARN" }
+        if (-not $global:IsAdmin) { Set-Status "Rodando sem privilegios de administrador - algumas acoes ficarao bloqueadas." "WARN" }
         else { Set-Status "Pronto." }
     })
 
