@@ -1,4 +1,4 @@
-﻿# ==============================================================================
+# ==============================================================================
 # Elgin Service Desk Tool
 # Ferramenta online de instalacao, limpeza, diagnostico e suporte para Windows
 # Interface em WPF/XAML — tema escuro moderno.
@@ -86,30 +86,6 @@ function Invoke-UiPump {
     [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([System.Action]{}, [System.Windows.Threading.DispatcherPriority]::Background) | Out-Null
 }
 
-# Reabre a propria ferramenta como Administrador via UAC, re-executando o
-# mesmo comando irm/iex a partir do Gist (nao ha .exe proprio para relancar,
-# ja que o script e sempre baixado fresco).
-function Request-AdminElevation {
-    param([string]$Url,[switch]$SilentMode)
-    if (Test-IsAdmin) { return $true }
-    if ([string]::IsNullOrWhiteSpace($Url)) { return $false }
-    $message = "Para instalar aplicativos, limpar componentes do Windows, executar reparos e usar o desinstalador avancado, a ferramenta precisa de permissao administrativa.`n`nO Windows exibira a janela oficial do UAC. A ferramenta nao coleta, nao armazena e nao visualiza credenciais.`n`nDeseja reabrir agora como Administrador?"
-    $shouldElevate = $true
-    if (-not $SilentMode) { $shouldElevate = Confirm-Action $message "Permissao administrativa necessaria" }
-    if (-not $shouldElevate) { return $false }
-    try {
-        $safeUrl = $Url.Replace("'","''")
-        $command = "`$env:ELGIN_SERVICE_DESK_URL='$safeUrl'; irm `$env:ELGIN_SERVICE_DESK_URL | iex"
-        Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile","-STA","-Command",$command) -Verb RunAs | Out-Null
-        return $true
-    } catch { Show-ErrorBox ("Nao foi possivel solicitar elevacao administrativa.`n`n{0}" -f $_.Exception.Message); return $false }
-}
-
-if (-not $NoElevatePrompt -and -not (Test-IsAdmin)) {
-    $elevated = Request-AdminElevation -Url $SourceUrl -SilentMode:$Silent
-    if ($elevated) { exit 0 }
-}
-
 function Initialize-Folders {
     foreach ($path in @($global:BasePath,$global:ConfigPath,$global:ReportsPath)) {
         if (-not (Test-Path $path)) { New-Item -ItemType Directory -Path $path -Force | Out-Null }
@@ -134,6 +110,39 @@ function Write-Log {
             $global:LogTextBox.ScrollToEnd()
         }
     } catch {}
+}
+
+Initialize-Folders
+
+# Reabre a propria ferramenta como Administrador via UAC, re-executando o
+# mesmo comando irm/iex a partir do Gist (nao ha .exe proprio para relancar,
+# ja que o script e sempre baixado fresco).
+function Request-AdminElevation {
+    param([string]$Url,[switch]$SilentMode)
+    if (Test-IsAdmin) { return $true }
+    if ([string]::IsNullOrWhiteSpace($Url)) {
+        Write-Log -Message "[ELEVATE] SourceUrl vazia — nao e possivel montar o comando de elevacao." -Level "ERROR"
+        return $false
+    }
+    $message = "Para instalar aplicativos, limpar componentes do Windows, executar reparos e usar o desinstalador avancado, a ferramenta precisa de permissao administrativa.`n`nO Windows exibira a janela oficial do UAC. A ferramenta nao coleta, nao armazena e nao visualiza credenciais.`n`nDeseja reabrir agora como Administrador?"
+    $shouldElevate = $true
+    if (-not $SilentMode) { $shouldElevate = Confirm-Action $message "Permissao administrativa necessaria" }
+    if (-not $shouldElevate) { return $false }
+    try {
+        $safeUrl = $Url.Replace("'","''")
+        $command = "`$env:ELGIN_SERVICE_DESK_URL='$safeUrl'; irm `$env:ELGIN_SERVICE_DESK_URL | iex"
+        Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile","-STA","-Command",$command) -Verb RunAs | Out-Null
+        return $true
+    } catch {
+        Write-Log -Message ("[ELEVATE] Falha ao solicitar elevacao: {0}" -f $_.Exception.Message) -Level "ERROR"
+        Show-ErrorBox ("Nao foi possivel solicitar elevacao administrativa.`n`n{0}" -f $_.Exception.Message)
+        return $false
+    }
+}
+
+if (-not $NoElevatePrompt -and -not (Test-IsAdmin)) {
+    $elevated = Request-AdminElevation -Url $SourceUrl -SilentMode:$Silent
+    if ($elevated) { exit 0 }
 }
 
 function Set-Status {
@@ -1341,7 +1350,6 @@ function Show-MainWindow {
 # ==============================================================================
 # ENTRADA
 # ==============================================================================
-Initialize-Folders
 Initialize-AppDatabase
 Initialize-ExtraDatabase
 Import-AppDatabase
