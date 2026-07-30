@@ -1,28 +1,31 @@
 ﻿# ==============================================================================
 # Elgin Service Desk Tool
-# Ferramenta portatil de instalacao, limpeza, diagnostico e suporte para Windows.
+# Ferramenta online de instalacao, limpeza, diagnostico e suporte para Windows
+# Interface em WPF/XAML — tema escuro moderno.
 #
-# Distribuicao: executavel unico (.exe), compilado com PS2EXE a partir deste
-# script (ver Build-Exe.ps1). Sem dependencia de Gist/irm/iex — basta baixar
-# o .exe de um link fixo (GitHub Releases) e executar em qualquer computador.
+# Execucao recomendada via Gist Raw URL (chamado por um .bat de atalho):
+# powershell.exe -NoProfile -STA -Command "`$env:ELGIN_SERVICE_DESK_URL='RAW_URL_DO_GIST'; irm `$env:ELGIN_SERVICE_DESK_URL | iex"
+#
+# Como o script e sempre baixado fresco do Gist a cada execucao, nao ha
+# mecanismo de auto-update: a versao mais recente e sempre a que roda.
 # ==============================================================================
 
 #requires -Version 5.1
 
 param(
     [switch]$Silent,
-    [switch]$NoElevatePrompt,
-    [switch]$NoUpdateCheck
+    [string]$SourceUrl = $env:ELGIN_SERVICE_DESK_URL,
+    [switch]$NoElevatePrompt
 )
 
 $ErrorActionPreference = "Stop"
 
 try {
-    Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
-    Add-Type -AssemblyName System.Drawing       -ErrorAction Stop
-    [System.Windows.Forms.Application]::EnableVisualStyles()
+    Add-Type -AssemblyName PresentationFramework -ErrorAction Stop
+    Add-Type -AssemblyName PresentationCore       -ErrorAction Stop
+    Add-Type -AssemblyName WindowsBase             -ErrorAction Stop
 } catch {
-    Write-Host "Nao foi possivel carregar Windows Forms/System.Drawing. Execute em Windows com interface grafica." -ForegroundColor Red
+    Write-Host "Nao foi possivel carregar WPF (PresentationFramework). Execute em Windows com interface grafica." -ForegroundColor Red
     Write-Host $_.Exception.Message -ForegroundColor Red
     exit 1
 }
@@ -31,20 +34,15 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "1.0.1"
+$global:AppVersion    = "2.0"
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
 $global:ReportsPath   = Join-Path $global:BasePath  "Relatorios"
 $global:ConfigFile    = Join-Path $global:ConfigPath "apps.json"
-$global:ExtraConfigFile = Join-Path $global:ConfigPath "extra_apps.json"
+$global:ExtraConfigFile   = Join-Path $global:ConfigPath "extra_apps.json"
 $global:PrinterConfigFile = Join-Path $global:ConfigPath "printers_config.json"
 $global:PrinterCacheFile  = Join-Path $global:BasePath   "printers_cache.json"
 $global:LogFile       = Join-Path $global:BasePath   "servicedesk.log"
-
-# URLs fixas (GitHub Releases) para checagem e download automatico de atualizacao.
-$global:UpdateVersionUrl     = "https://raw.githubusercontent.com/Dan-Vaz/elgin-service-desk-tool/master/version.json"
-$global:UpdateReleaseUrl     = "https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/latest"
-$global:UpdateAssetUrlFormat = "https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v{0}/ServiceDeskTool.exe"
 
 $global:IsAdmin       = $false
 $global:HasWinget     = $false
@@ -54,22 +52,13 @@ $global:WingetPath    = $null
 $global:ChocoPath     = $null
 $global:AppsList        = New-Object System.Collections.ArrayList
 $global:ExtraAppsList   = New-Object System.Collections.ArrayList
-$global:PrintersList    = New-Object System.Collections.ArrayList
-$global:StatusLabel   = $null
-$global:LogTextBox    = $null
+$global:PrintersList     = New-Object System.Collections.ArrayList
 
-$global:Theme = [PSCustomObject]@{
-    Background = [System.Drawing.Color]::FromArgb(245,245,245)
-    Surface    = [System.Drawing.Color]::White
-    Sidebar    = [System.Drawing.Color]::FromArgb(20,30,40)
-    Primary    = [System.Drawing.Color]::FromArgb(0,120,215)
-    Success    = [System.Drawing.Color]::FromArgb(34,139,34)
-    Danger     = [System.Drawing.Color]::FromArgb(178,34,34)
-    Warning    = [System.Drawing.Color]::FromArgb(220,140,0)
-    Neutral    = [System.Drawing.Color]::FromArgb(80,80,80)
-    Text       = [System.Drawing.Color]::FromArgb(35,35,35)
-    Muted      = [System.Drawing.Color]::Gray
-}
+$global:StatusLabel  = $null
+$global:LogTextBox   = $null
+$global:MainWindow   = $null
+
+function Get-Brush { param([string]$Hex) [System.Windows.Media.BrushConverter]::new().ConvertFromString($Hex) }
 
 # ==============================================================================
 # FUNCOES BASE
@@ -82,49 +71,42 @@ function Test-IsAdmin {
     } catch { return $false }
 }
 
-function Show-Info    { param([string]$Message,[string]$Title=$global:AppName) [System.Windows.Forms.MessageBox]::Show($Message,$Title,[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Information)|Out-Null }
-function Show-Warning { param([string]$Message,[string]$Title=$global:AppName) [System.Windows.Forms.MessageBox]::Show($Message,$Title,[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Warning)|Out-Null }
-function Show-ErrorBox{ param([string]$Message,[string]$Title=$global:AppName) [System.Windows.Forms.MessageBox]::Show($Message,$Title,[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Error)|Out-Null }
+function Show-Info    { param([string]$Message,[string]$Title=$global:AppName) [System.Windows.MessageBox]::Show($Message,$Title,[System.Windows.MessageBoxButton]::OK,[System.Windows.MessageBoxImage]::Information) | Out-Null }
+function Show-Warning { param([string]$Message,[string]$Title=$global:AppName) [System.Windows.MessageBox]::Show($Message,$Title,[System.Windows.MessageBoxButton]::OK,[System.Windows.MessageBoxImage]::Warning) | Out-Null }
+function Show-ErrorBox{ param([string]$Message,[string]$Title=$global:AppName) [System.Windows.MessageBox]::Show($Message,$Title,[System.Windows.MessageBoxButton]::OK,[System.Windows.MessageBoxImage]::Error) | Out-Null }
 function Confirm-Action {
     param([string]$Message,[string]$Title="Confirmacao")
-    return ([System.Windows.Forms.MessageBox]::Show($Message,$Title,[System.Windows.Forms.MessageBoxButtons]::YesNo,[System.Windows.Forms.MessageBoxIcon]::Question) -eq [System.Windows.Forms.DialogResult]::Yes)
+    return ([System.Windows.MessageBox]::Show($Message,$Title,[System.Windows.MessageBoxButton]::YesNo,[System.Windows.MessageBoxImage]::Question) -eq [System.Windows.MessageBoxResult]::Yes)
 }
 
-# Caminho do proprio executavel (funciona tanto rodando como .ps1 quanto compilado via PS2EXE).
-function Get-SelfExecutablePath {
-    try {
-        $proc = [System.Diagnostics.Process]::GetCurrentProcess()
-        if ($proc.MainModule.FileName -match 'powershell(_ise)?\.exe$|pwsh\.exe$') {
-            # Rodando como script (.ps1) via powershell.exe — nao ha exe proprio.
-            return $null
-        }
-        return $proc.MainModule.FileName
-    } catch { return $null }
+# Substitui Application.DoEvents() (que nao existe em WPF): processa a fila de
+# mensagens pendentes da UI para manter a janela responsiva durante operacoes longas.
+function Invoke-UiPump {
+    if ($null -eq [System.Windows.Threading.Dispatcher]::CurrentDispatcher) { return }
+    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([System.Action]{}, [System.Windows.Threading.DispatcherPriority]::Background) | Out-Null
 }
 
-# Reabre a propria ferramenta como Administrador (via UAC). Quando compilado
-# com PS2EXE, isso relanca o proprio .exe; quando rodando como .ps1 (dev),
-# relanca via powershell.exe -File.
+# Reabre a propria ferramenta como Administrador via UAC, re-executando o
+# mesmo comando irm/iex a partir do Gist (nao ha .exe proprio para relancar,
+# ja que o script e sempre baixado fresco).
 function Request-AdminElevation {
-    param([switch]$SilentMode)
+    param([string]$Url,[switch]$SilentMode)
     if (Test-IsAdmin) { return $true }
-    $message = "Para instalar aplicativos, limpar componentes do Windows e usar as ferramentas de rede, a ferramenta precisa de permissao administrativa.`n`nO Windows exibira a janela oficial do UAC. A ferramenta nao coleta, nao armazena e nao visualiza credenciais.`n`nDeseja reabrir agora como Administrador?"
+    if ([string]::IsNullOrWhiteSpace($Url)) { return $false }
+    $message = "Para instalar aplicativos, limpar componentes do Windows, executar reparos e usar o desinstalador avancado, a ferramenta precisa de permissao administrativa.`n`nO Windows exibira a janela oficial do UAC. A ferramenta nao coleta, nao armazena e nao visualiza credenciais.`n`nDeseja reabrir agora como Administrador?"
     $shouldElevate = $true
     if (-not $SilentMode) { $shouldElevate = Confirm-Action $message "Permissao administrativa necessaria" }
     if (-not $shouldElevate) { return $false }
     try {
-        $selfExe = Get-SelfExecutablePath
-        if ($selfExe) {
-            Start-Process -FilePath $selfExe -Verb RunAs | Out-Null
-        } else {
-            Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile","-STA","-File","`"$PSCommandPath`"") -Verb RunAs | Out-Null
-        }
+        $safeUrl = $Url.Replace("'","''")
+        $command = "`$env:ELGIN_SERVICE_DESK_URL='$safeUrl'; irm `$env:ELGIN_SERVICE_DESK_URL | iex"
+        Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile","-STA","-Command",$command) -Verb RunAs | Out-Null
         return $true
     } catch { Show-ErrorBox ("Nao foi possivel solicitar elevacao administrativa.`n`n{0}" -f $_.Exception.Message); return $false }
 }
 
 if (-not $NoElevatePrompt -and -not (Test-IsAdmin)) {
-    $elevated = Request-AdminElevation -SilentMode:$Silent
+    $elevated = Request-AdminElevation -Url $SourceUrl -SilentMode:$Silent
     if ($elevated) { exit 0 }
 }
 
@@ -147,10 +129,9 @@ function Write-Log {
         $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
         $line      = "[{0}][{1}] {2}" -f $timestamp,$Level,$Message
         Add-Content -Path $global:LogFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
-        if ($global:LogTextBox -ne $null -and -not $global:LogTextBox.IsDisposed) {
+        if ($global:LogTextBox -ne $null) {
             $global:LogTextBox.AppendText($line + [Environment]::NewLine)
-            $global:LogTextBox.SelectionStart = $global:LogTextBox.Text.Length
-            $global:LogTextBox.ScrollToCaret()
+            $global:LogTextBox.ScrollToEnd()
         }
     } catch {}
 }
@@ -159,7 +140,7 @@ function Set-Status {
     param([string]$Text,[ValidateSet("INFO","WARN","ERROR","SUCCESS")][string]$Level="INFO")
     if ($global:StatusLabel -ne $null) { $global:StatusLabel.Text = $Text }
     Write-Log -Message $Text -Level $Level
-    [System.Windows.Forms.Application]::DoEvents()
+    Invoke-UiPump
 }
 
 function Update-SessionPath {
@@ -268,7 +249,7 @@ function Invoke-ManagedProcess {
 
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         while (-not $proc.HasExited) {
-            [System.Windows.Forms.Application]::DoEvents()
+            Invoke-UiPump
             Start-Sleep -Milliseconds 200
             if ($TimeoutSeconds -gt 0 -and $sw.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
                 try{$proc.Kill()}catch{}
@@ -314,7 +295,7 @@ function Invoke-ConsoleCommand {
         $errTask=$proc.StandardError.ReadToEndAsync()
         $sw=[System.Diagnostics.Stopwatch]::StartNew()
         while (-not $proc.HasExited) {
-            [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 150
+            Invoke-UiPump; Start-Sleep -Milliseconds 150
             if ($TimeoutSeconds -gt 0 -and $sw.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
                 try{$proc.Kill()}catch{}
                 $pOut=try{$outTask.Result}catch{""}; $pErr=try{$errTask.Result}catch{""}
@@ -333,82 +314,6 @@ function Invoke-ConsoleCommand {
     } finally {
         if ($proc -ne $null) { try { $proc.Dispose() } catch {} }
     }
-}
-
-# ==============================================================================
-# CHECAGEM E APLICACAO DE ATUALIZACAO
-# ==============================================================================
-function Test-NewVersionAvailable {
-    if ($NoUpdateCheck) { return $null }
-    try {
-        $resp = Invoke-RestMethod -Uri $global:UpdateVersionUrl -TimeoutSec 5 -ErrorAction Stop
-        if ($resp.Version -and ([version]$resp.Version -gt [version]$global:AppVersion)) { return $resp.Version }
-    } catch { Write-Log -Message ("Checagem de atualizacao falhou (normal se offline): {0}" -f $_.Exception.Message) -Level "WARN" }
-    return $null
-}
-
-# Baixa o .exe da nova versao e agenda a substituicao/reabertura via um pequeno
-# helper .cmd (nao .ps1 — evita ExecutionPolicy Bypass, que e o padrao que
-# antivirus/Netskope costumam flagar). O helper espera este processo fechar,
-# copia o novo exe por cima do atual e reabre a ferramenta.
-function Invoke-SelfUpdate {
-    param([Parameter(Mandatory=$true)][string]$NewVersion)
-
-    $selfExe = Get-SelfExecutablePath
-    if (-not $selfExe) {
-        Show-Info "Atualizacao automatica so funciona na versao compilada (.exe). Abrindo a pagina de download."
-        Start-Process $global:UpdateReleaseUrl
-        return
-    }
-
-    $downloadUrl = [string]::Format($global:UpdateAssetUrlFormat, $NewVersion)
-    $tempExe = Join-Path $env:TEMP ("ServiceDeskTool_v{0}.exe" -f $NewVersion)
-
-    try {
-        Set-Status ("Baixando atualizacao v{0}..." -f $NewVersion)
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        $prev = $ProgressPreference; $ProgressPreference = "SilentlyContinue"
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $tempExe -UseBasicParsing -ErrorAction Stop
-        $ProgressPreference = $prev
-        if (-not (Test-Path $tempExe) -or (Get-Item $tempExe).Length -lt 51200) {
-            throw "Arquivo baixado com tamanho suspeito (possivel bloqueio de proxy)."
-        }
-    } catch {
-        Write-Log -Message ("[UPDATE] Falha ao baixar v{0}: {1}" -f $NewVersion,$_.Exception.Message) -Level "ERROR"
-        Show-Warning "Falha ao baixar a atualizacao automaticamente.`n`nAbrindo a pagina de download manual."
-        Start-Process $global:UpdateReleaseUrl
-        if (Test-Path $tempExe) { Remove-Item $tempExe -Force -ErrorAction SilentlyContinue }
-        return
-    }
-
-    $currentPid = $PID
-    $helperPath = Join-Path $env:TEMP ("sdtool_update_{0}.cmd" -f [guid]::NewGuid().ToString("N").Substring(0,8))
-    $helperBody = @"
-@echo off
-set /a tries=0
-:wait
-set /a tries+=1
-if %tries% GTR 60 goto giveup
-tasklist /FI "PID eq $currentPid" 2>NUL | find "$currentPid" >NUL
-if not errorlevel 1 (
-    ping 127.0.0.1 -n 2 >NUL
-    goto wait
-)
-:giveup
-copy /y "$tempExe" "$selfExe" >NUL
-del "$tempExe" >NUL 2>&1
-start "" "$selfExe"
-del "%~f0"
-"@
-    Set-Content -Path $helperPath -Value $helperBody -Encoding ASCII
-
-    Write-Log -Message ("[UPDATE] Atualizacao v{0} baixada. Fechando para aplicar." -f $NewVersion) -Level "SUCCESS"
-    Start-Process -FilePath $helperPath -WindowStyle Hidden | Out-Null
-
-    Show-Info ("Atualizacao v{0} baixada. A ferramenta vai fechar e reabrir automaticamente." -f $NewVersion)
-    [System.Windows.Forms.Application]::Exit()
-    Start-Sleep -Milliseconds 300
-    [Environment]::Exit(0)
 }
 
 # ==============================================================================
@@ -447,9 +352,7 @@ function Import-AppDatabase {
 
 # ==============================================================================
 # PACOTE EXTRA — instaladores hospedados onde a empresa preferir (ex.: GitHub
-# Releases). NAO ha URLs pre-cadastradas aqui: use "Adicionar" na aba Pacote
-# Extra para cadastrar os instaladores da sua empresa (ex.: antivirus, VPN,
-# agente de inventario). Fica salvo em extra_apps.json e some com voce.
+# Releases). Cadastre pela aba "Pacote Extra"; fica salvo em extra_apps.json.
 # ==============================================================================
 function Initialize-ExtraDatabase {
     if (-not (Test-Path $global:ExtraConfigFile)) {
@@ -472,58 +375,59 @@ function Export-ExtraDatabase {
     } catch { Show-ErrorBox ("Falha ao salvar extra_apps.json.`n`n{0}" -f $_.Exception.Message); return $false }
 }
 
+$script:AddExtraDialogXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Adicionar ao Pacote Extra" Height="300" Width="480"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        Background="#18181B">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/><RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <TextBlock Grid.Row="0" Text="Nome do software:" Foreground="#9CA3AF" Margin="0,0,0,4"/>
+        <TextBox x:Name="TxtNome" Grid.Row="1" Height="28" Background="#27272A" Foreground="White" BorderBrush="#3F3F46"/>
+        <TextBlock Grid.Row="2" Text="URL de download direto (.exe/.msi):" Foreground="#9CA3AF" Margin="0,14,0,4"/>
+        <TextBox x:Name="TxtUrl" Grid.Row="3" Height="28" Background="#27272A" Foreground="White" BorderBrush="#3F3F46"/>
+        <CheckBox x:Name="ChkMsi" Grid.Row="4" Content="Arquivo .msi (usa msiexec automaticamente)" Foreground="#E4E4E7" Margin="0,14,0,0"/>
+        <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button x:Name="BtnCancelar" Content="Cancelar" Width="100" Height="34" Margin="0,0,10,0" Background="#3F3F46" Foreground="White" BorderThickness="0"/>
+            <Button x:Name="BtnSalvar" Content="Salvar" Width="120" Height="34" Background="#16A34A" Foreground="White" BorderThickness="0" FontWeight="Bold"/>
+        </StackPanel>
+    </Grid>
+</Window>
+'@
+
 function Show-AddExtraAppDialog {
-    $df = New-Object System.Windows.Forms.Form
-    $df.Text          = "Adicionar ao Pacote Extra"
-    $df.Size          = New-Object System.Drawing.Size(520, 260)
-    $df.StartPosition = "CenterParent"
-    $df.FormBorderStyle = "FixedDialog"
-    $df.MaximizeBox   = $false; $df.MinimizeBox = $false
-    $df.BackColor     = $global:Theme.Background
+    $reader = [System.Xml.XmlNodeReader]::new([xml]$script:AddExtraDialogXaml)
+    $dlg = [System.Windows.Markup.XamlReader]::Load($reader)
+    $dlg.Owner = $global:MainWindow
 
-    $lblN = New-Object System.Windows.Forms.Label
-    $lblN.Text="Nome do software:"; $lblN.Location=New-Object System.Drawing.Point(20,20); $lblN.AutoSize=$true
-    $df.Controls.Add($lblN)
-    $txtN = New-Object System.Windows.Forms.TextBox
-    $txtN.Location = New-Object System.Drawing.Point(20, 40); $txtN.Size = New-Object System.Drawing.Size(460, 22)
-    $df.Controls.Add($txtN)
-
-    $lblU = New-Object System.Windows.Forms.Label
-    $lblU.Text="URL de download direto (.exe/.msi):"; $lblU.Location=New-Object System.Drawing.Point(20,72); $lblU.AutoSize=$true
-    $df.Controls.Add($lblU)
-    $txtU = New-Object System.Windows.Forms.TextBox
-    $txtU.Location = New-Object System.Drawing.Point(20, 92); $txtU.Size = New-Object System.Drawing.Size(460, 22)
-    $df.Controls.Add($txtU)
-
-    $cbMsi = New-Object System.Windows.Forms.CheckBox
-    $cbMsi.Text = "Arquivo .msi (usa msiexec automaticamente)"
-    $cbMsi.Location = New-Object System.Drawing.Point(20, 124); $cbMsi.AutoSize = $true
-    $df.Controls.Add($cbMsi)
-
-    $btnSave = New-Object System.Windows.Forms.Button
-    $btnSave.Text="Salvar"; $btnSave.Location=New-Object System.Drawing.Point(20,162); $btnSave.Size=New-Object System.Drawing.Size(140,34)
-    $btnSave.BackColor=$global:Theme.Success; $btnSave.ForeColor=[System.Drawing.Color]::White; $btnSave.FlatStyle="Flat"
-    $btnCncl = New-Object System.Windows.Forms.Button
-    $btnCncl.Text="Cancelar"; $btnCncl.Location=New-Object System.Drawing.Point(170,162); $btnCncl.Size=New-Object System.Drawing.Size(100,34)
-    $btnCncl.BackColor=$global:Theme.Neutral; $btnCncl.ForeColor=[System.Drawing.Color]::White; $btnCncl.FlatStyle="Flat"
-    $df.Controls.AddRange(@($btnSave,$btnCncl))
+    $txtNome = $dlg.FindName("TxtNome")
+    $txtUrl  = $dlg.FindName("TxtUrl")
+    $chkMsi  = $dlg.FindName("ChkMsi")
+    $btnSalvar   = $dlg.FindName("BtnSalvar")
+    $btnCancelar = $dlg.FindName("BtnCancelar")
 
     $script:extraDialogResult = $null
-    $btnSave.Add_Click({
-        $n = $txtN.Text.Trim(); $u = $txtU.Text.Trim()
+    $btnSalvar.Add_Click({
+        $n = $txtNome.Text.Trim(); $u = $txtUrl.Text.Trim()
         if ([string]::IsNullOrWhiteSpace($n)) { Show-Warning "Informe o nome."; return }
         if ([string]::IsNullOrWhiteSpace($u) -or $u -notmatch "^https?://") { Show-Warning "Informe uma URL valida (https://)."; return }
-        $isMsi = $cbMsi.Checked
+        $isMsi = $chkMsi.IsChecked
         $ext   = if ($isMsi) { ".msi" } else { [System.IO.Path]::GetExtension($u) }
         $script:extraDialogResult = [PSCustomObject]@{
             Name=$n; Url=$u; SilentArgs=if($isMsi){@("/qn","/norestart")}else{@()}
             Ext=$ext; IsMSI=$isMsi; TimeoutSeconds=1800; Enabled=$true
         }
-        $df.DialogResult = [System.Windows.Forms.DialogResult]::OK
-        $df.Close()
+        $dlg.DialogResult = $true
+        $dlg.Close()
     })
-    $btnCncl.Add_Click({ $df.DialogResult=[System.Windows.Forms.DialogResult]::Cancel; $df.Close() })
-    [void]$df.ShowDialog()
+    $btnCancelar.Add_Click({ $dlg.DialogResult = $false; $dlg.Close() })
+    [void]$dlg.ShowDialog()
     return $script:extraDialogResult
 }
 
@@ -592,7 +496,7 @@ function Install-DirectApp {
 
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         while ($proc -and -not $proc.HasExited) {
-            [System.Windows.Forms.Application]::DoEvents()
+            Invoke-UiPump
             Start-Sleep -Milliseconds 400
             if ($sw.Elapsed.TotalSeconds -gt $timeout) { try{$proc.Kill()}catch{}; Write-Log -Message ("[EXTRA] Timeout em {0}" -f $appName) -Level "ERROR"; return $false }
         }
@@ -755,8 +659,7 @@ function Reset-PrintSpooler {
 # ==============================================================================
 # IMPRESSORAS DE REDE — consulta o servidor de impressao (spooler) e faz SNMP
 # direto no IP de cada impressora para ler nivel de toner/uptime/paginas.
-# So funciona com a maquina conectada a rede/VPN da empresa (mesma exigencia
-# do app antigo de impressoras).
+# So funciona com a maquina conectada a rede/VPN da empresa.
 # ==============================================================================
 function Get-PrinterConfig {
     if (-not (Test-Path $global:PrinterConfigFile)) {
@@ -773,47 +676,48 @@ function Save-PrinterConfig {
         ConvertTo-Json | Out-File $global:PrinterConfigFile -Encoding UTF8 -Force
 }
 
+$script:ConfigServidorXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Configurar Servidor de Impressao" Height="260" Width="440"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        Background="#18181B">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/><RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <TextBlock Grid.Row="0" Text="Nome/IP do servidor de impressao:" Foreground="#9CA3AF" Margin="0,0,0,4"/>
+        <TextBox x:Name="TxtServidor" Grid.Row="1" Height="28" Background="#27272A" Foreground="White" BorderBrush="#3F3F46"/>
+        <TextBlock Grid.Row="2" Text="Comunidade SNMP:" Foreground="#9CA3AF" Margin="0,14,0,4"/>
+        <TextBox x:Name="TxtComunidade" Grid.Row="3" Height="28" Width="200" HorizontalAlignment="Left" Background="#27272A" Foreground="White" BorderBrush="#3F3F46"/>
+        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="BtnCancelar" Content="Cancelar" Width="100" Height="34" Margin="0,0,10,0" Background="#3F3F46" Foreground="White" BorderThickness="0"/>
+            <Button x:Name="BtnSalvar" Content="Salvar" Width="120" Height="34" Background="#16A34A" Foreground="White" BorderThickness="0" FontWeight="Bold"/>
+        </StackPanel>
+    </Grid>
+</Window>
+'@
+
 function Show-ConfigurarServidorDialog {
     $cfg = Get-PrinterConfig
-    $df = New-Object System.Windows.Forms.Form
-    $df.Text = "Configurar Servidor de Impressao"
-    $df.Size = New-Object System.Drawing.Size(440,220)
-    $df.StartPosition = "CenterParent"; $df.FormBorderStyle = "FixedDialog"
-    $df.MaximizeBox = $false; $df.MinimizeBox = $false
-    $df.BackColor = $global:Theme.Background
+    $reader = [System.Xml.XmlNodeReader]::new([xml]$script:ConfigServidorXaml)
+    $dlg = [System.Windows.Markup.XamlReader]::Load($reader)
+    $dlg.Owner = $global:MainWindow
 
-    $lbl1 = New-Object System.Windows.Forms.Label
-    $lbl1.Text = "Nome/IP do servidor de impressao:"; $lbl1.Location = New-Object System.Drawing.Point(20,20); $lbl1.AutoSize = $true
-    $df.Controls.Add($lbl1)
-    $txt1 = New-Object System.Windows.Forms.TextBox
-    $txt1.Text = [string]$cfg.ServidorPrint
-    $txt1.Location = New-Object System.Drawing.Point(20,42); $txt1.Size = New-Object System.Drawing.Size(380,22)
-    $df.Controls.Add($txt1)
+    $txtServidor   = $dlg.FindName("TxtServidor")
+    $txtComunidade = $dlg.FindName("TxtComunidade")
+    $txtServidor.Text   = [string]$cfg.ServidorPrint
+    $txtComunidade.Text = [string]$cfg.SnmpCommunity
 
-    $lbl2 = New-Object System.Windows.Forms.Label
-    $lbl2.Text = "Comunidade SNMP:"; $lbl2.Location = New-Object System.Drawing.Point(20,78); $lbl2.AutoSize = $true
-    $df.Controls.Add($lbl2)
-    $txt2 = New-Object System.Windows.Forms.TextBox
-    $txt2.Text = [string]$cfg.SnmpCommunity
-    $txt2.Location = New-Object System.Drawing.Point(20,100); $txt2.Size = New-Object System.Drawing.Size(200,22)
-    $df.Controls.Add($txt2)
-
-    $btnSave = New-Object System.Windows.Forms.Button
-    $btnSave.Text = "Salvar"; $btnSave.Location = New-Object System.Drawing.Point(20,140)
-    $btnSave.Size = New-Object System.Drawing.Size(140,34); $btnSave.BackColor = $global:Theme.Success
-    $btnSave.ForeColor = [System.Drawing.Color]::White; $btnSave.FlatStyle = "Flat"
-    $btnSave.Add_Click({
-        Save-PrinterConfig -ServidorPrint $txt1.Text.Trim() -SnmpCommunity $txt2.Text.Trim()
-        $df.DialogResult = [System.Windows.Forms.DialogResult]::OK
-        $df.Close()
+    $dlg.FindName("BtnSalvar").Add_Click({
+        Save-PrinterConfig -ServidorPrint $txtServidor.Text.Trim() -SnmpCommunity $txtComunidade.Text.Trim()
+        $dlg.DialogResult = $true
+        $dlg.Close()
     })
-    $btnCncl = New-Object System.Windows.Forms.Button
-    $btnCncl.Text = "Cancelar"; $btnCncl.Location = New-Object System.Drawing.Point(170,140)
-    $btnCncl.Size = New-Object System.Drawing.Size(100,34); $btnCncl.BackColor = $global:Theme.Neutral
-    $btnCncl.ForeColor = [System.Drawing.Color]::White; $btnCncl.FlatStyle = "Flat"
-    $btnCncl.Add_Click({ $df.DialogResult = [System.Windows.Forms.DialogResult]::Cancel; $df.Close() })
-    $df.Controls.AddRange(@($btnSave,$btnCncl))
-    [void]$df.ShowDialog()
+    $dlg.FindName("BtnCancelar").Add_Click({ $dlg.DialogResult = $false; $dlg.Close() })
+    [void]$dlg.ShowDialog()
 }
 
 # SNMP puro via UDP (sem dependencias externas) — le toner/uptime/paginas.
@@ -1022,8 +926,8 @@ function Obter-Modelo {
 }
 
 # Consulta o spooler do servidor de impressao configurado e faz SNMP em paralelo
-# (runspace pool) em cada impressora. Em caso de falha (servidor fora da rede/VPN),
-# cai para o ultimo resultado bom conhecido, salvo em disco.
+# (runspace pool) em cada impressora. Em caso de falha, cai para o ultimo
+# resultado bom conhecido, salvo em disco.
 function Get-ImpressorasRede {
     $cfg = Get-PrinterConfig
     Set-Status ("Consultando spooler em '{0}'..." -f $cfg.ServidorPrint)
@@ -1039,7 +943,7 @@ function Get-ImpressorasRede {
                 return @($cache)
             } catch {}
         }
-        Show-Warning ("Nao foi possivel acessar o servidor de impressao '{0}'.`n`nConfirme se voce esta conectado a rede/VPN da empresa (aba Configurar Servidor)." -f $cfg.ServidorPrint)
+        Show-Warning ("Nao foi possivel acessar o servidor de impressao '{0}'.`n`nConfirme se voce esta conectado a rede/VPN da empresa (Configurar Servidor)." -f $cfg.ServidorPrint)
         return @()
     }
 
@@ -1079,7 +983,7 @@ return [PSCustomObject]@{
     IP        = `$ip
     Modelo    = `$modelo
     Status    = if (`$online) { 'Online' } else { 'Offline' }
-    Toners    = @(`$snmp.Toners | ForEach-Object { "{0}:{1}%" -f (`$_.CorToner.Substring(0,1)), `$_.Pct })
+    Toner     = (@(`$snmp.Toners | ForEach-Object { "{0}:{1}%" -f (`$_.CorToner.Substring(0,1)), `$_.Pct }) -join " ")
     Uptime    = `$snmp.Uptime
     PageCount = `$snmp.PageCount
 }
@@ -1097,7 +1001,7 @@ return [PSCustomObject]@{
     foreach ($t in $tasks) {
         $done++
         Set-Status ("Varrendo impressoras... ({0}/{1})" -f $done,$total)
-        [System.Windows.Forms.Application]::DoEvents()
+        Invoke-UiPump
         try {
             $obj = $t.Pipe.EndInvoke($t.Handle) | Select-Object -Last 1
             if ($null -ne $obj) { $resultado += $obj }
@@ -1116,303 +1020,322 @@ function Export-PrintersCsv {
     $path = Join-Path $global:ReportsPath ("Impressoras-{0}.csv" -f (Get-Date -Format "yyyyMMdd-HHmmss"))
     $lines = @("Nome,IP,Modelo,Status,Toner,Uptime,PaginasImpressas")
     foreach ($p in $Printers) {
-        $toner = ($p.Toners -join " ")
-        $lines += ('{0},{1},{2},{3},"{4}",{5},{6}' -f $p.Nome,$p.IP,$p.Modelo,$p.Status,$toner,$p.Uptime,$p.PageCount)
+        $lines += ('{0},{1},{2},{3},"{4}",{5},{6}' -f $p.Nome,$p.IP,$p.Modelo,$p.Status,$p.Toner,$p.Uptime,$p.PageCount)
     }
     $lines | Out-File $path -Encoding UTF8 -Force
     return $path
 }
 
 # ==============================================================================
-# INTERFACE (WinForms)
+# INTERFACE (WPF) — tema escuro moderno
 # ==============================================================================
-function New-SidebarButton {
-    param([string]$Text,[int]$Y)
-    $b = New-Object System.Windows.Forms.Button
-    $b.Text = $Text; $b.Location = New-Object System.Drawing.Point(0,$Y); $b.Size = New-Object System.Drawing.Size(220,40)
-    $b.FlatStyle = "Flat"; $b.FlatAppearance.BorderSize = 0
-    $b.BackColor = $global:Theme.Sidebar; $b.ForeColor = [System.Drawing.Color]::White
-    $b.TextAlign = "MiddleLeft"; $b.Padding = New-Object System.Windows.Forms.Padding(16,0,0,0)
-    $b.Font = New-Object System.Drawing.Font("Segoe UI",10)
-    $b.Cursor = "Hand"
-    return $b
-}
+$script:MainWindowXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Elgin Service Desk Tool" Height="720" Width="1180"
+        WindowStartupLocation="CenterScreen" Background="#18181B">
+    <Window.Resources>
+        <Style x:Key="SidebarButton" TargetType="Button">
+            <Setter Property="Height" Value="44"/>
+            <Setter Property="Margin" Value="0,0,0,4"/>
+            <Setter Property="Foreground" Value="#9CA3AF"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="Padding" Value="22,0,0,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="#219AF9" BorderThickness="{TemplateBinding Tag}">
+                            <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Background" Value="#232326"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
-function Show-MainForm {
-    $form = New-Object System.Windows.Forms.Form
-    $form.Text = "$($global:AppName) v$($global:AppVersion)"
-    $form.Size = New-Object System.Drawing.Size(980,640)
-    $form.StartPosition = "CenterScreen"
-    $form.BackColor = $global:Theme.Background
-    $form.MinimumSize = New-Object System.Drawing.Size(900,600)
+        <Style x:Key="CardButton" TargetType="Button">
+            <Setter Property="Height" Value="40"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.85"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
-    $sidebar = New-Object System.Windows.Forms.Panel
-    $sidebar.Size = New-Object System.Drawing.Size(220,0)
-    $sidebar.Dock = "Left"
-    $sidebar.BackColor = $global:Theme.Sidebar
-    $form.Controls.Add($sidebar)
+        <Style TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="#1E1E1E"/>
+            <Setter Property="Foreground" Value="#9CA3AF"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+        <Style TargetType="CheckBox">
+            <Setter Property="Foreground" Value="#E4E4E7"/>
+            <Setter Property="Margin" Value="0,0,0,10"/>
+            <Setter Property="FontSize" Value="13"/>
+        </Style>
+    </Window.Resources>
 
-    $content = New-Object System.Windows.Forms.Panel
-    $content.Dock = "Fill"
-    $content.BackColor = $global:Theme.Background
-    $content.Padding = New-Object System.Windows.Forms.Padding(20)
-    $form.Controls.Add($content)
-    $content.BringToFront()
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="220"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
 
-    $statusBar = New-Object System.Windows.Forms.Panel
-    $statusBar.Dock = "Bottom"; $statusBar.Height = 30; $statusBar.BackColor = $global:Theme.Sidebar
-    $global:StatusLabel = New-Object System.Windows.Forms.Label
-    $global:StatusLabel.Text = "Pronto."; $global:StatusLabel.ForeColor = [System.Drawing.Color]::White
-    $global:StatusLabel.Dock = "Fill"; $global:StatusLabel.TextAlign = "MiddleLeft"
-    $global:StatusLabel.Padding = New-Object System.Windows.Forms.Padding(10,0,0,0)
-    $statusBar.Controls.Add($global:StatusLabel)
-    $form.Controls.Add($statusBar)
+        <Border Grid.Column="0" Background="#1c1c1e" BorderBrush="#2A2A2A" BorderThickness="0,0,1,0">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Margin="22,26,0,20">
+                    <TextBlock Text="Elgin" Foreground="White" FontSize="20" FontWeight="Bold"/>
+                    <TextBlock Text="Service Desk Tool" Foreground="#6B7280" FontSize="12"/>
+                </StackPanel>
+                <StackPanel DockPanel.Dock="Top" Margin="0,10,0,0">
+                    <Button x:Name="NavInstalar"  Content="Instalar Aplicativos" Style="{StaticResource SidebarButton}" Background="#232326" Foreground="White" Tag="3,0,0,0"/>
+                    <Button x:Name="NavExtra"     Content="Pacote Extra"        Style="{StaticResource SidebarButton}" Tag="0"/>
+                    <Button x:Name="NavLimpeza"   Content="Limpeza"             Style="{StaticResource SidebarButton}" Tag="0"/>
+                    <Button x:Name="NavRede"      Content="Rede"                Style="{StaticResource SidebarButton}" Tag="0"/>
+                    <Button x:Name="NavImpressao" Content="Impressao"           Style="{StaticResource SidebarButton}" Tag="0"/>
+                    <Button x:Name="NavLogs"      Content="Logs"                Style="{StaticResource SidebarButton}" Tag="0"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
 
-    $panels = @{}
-    function New-Section {
-        param([string]$Key)
-        $p = New-Object System.Windows.Forms.Panel
-        $p.Dock = "Fill"; $p.Visible = $false; $p.AutoScroll = $true
-        $content.Controls.Add($p)
-        $panels[$Key] = $p
-        return $p
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="34"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="30">
+                <!-- Instalar Aplicativos -->
+                <Grid x:Name="PanelInstalar">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="Instalar Aplicativos" Foreground="White" FontSize="22" FontWeight="Bold" Margin="0,0,0,16"/>
+                    <ScrollViewer Grid.Row="1"><StackPanel x:Name="SpAppsList"/></ScrollViewer>
+                    <Button Grid.Row="2" x:Name="BtnInstalarSelecionados" Content="Instalar Selecionados" Width="220" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="#219AF9" Margin="0,16,0,0"/>
+                </Grid>
+
+                <!-- Pacote Extra -->
+                <Grid x:Name="PanelExtra" Visibility="Collapsed">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="Pacote Extra" Foreground="White" FontSize="22" FontWeight="Bold" Margin="0,0,0,16"/>
+                    <ScrollViewer Grid.Row="1"><StackPanel x:Name="SpExtraList"/></ScrollViewer>
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,16,0,0">
+                        <Button x:Name="BtnAdicionarExtra" Content="Adicionar" Width="140" Style="{StaticResource CardButton}" Background="#16A34A" Margin="0,0,10,0"/>
+                        <Button x:Name="BtnInstalarExtra" Content="Instalar Selecionados" Width="220" Style="{StaticResource CardButton}" Background="#219AF9"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- Limpeza -->
+                <StackPanel x:Name="PanelLimpeza" Visibility="Collapsed">
+                    <TextBlock Text="Limpeza" Foreground="White" FontSize="22" FontWeight="Bold" Margin="0,0,0,16"/>
+                    <Button x:Name="BtnLimparTemp"    Content="Limpar Arquivos Temporarios"  Width="300" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="#219AF9" Margin="0,0,0,10"/>
+                    <Button x:Name="BtnLimparWU"      Content="Limpar Cache do Windows Update" Width="300" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="#219AF9" Margin="0,0,0,10"/>
+                    <Button x:Name="BtnLimparGeo"     Content="Limpar Cache de Geolocalizacao" Width="300" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="#219AF9"/>
+                </StackPanel>
+
+                <!-- Rede -->
+                <StackPanel x:Name="PanelRede" Visibility="Collapsed">
+                    <TextBlock Text="Ferramentas de Rede" Foreground="White" FontSize="22" FontWeight="Bold" Margin="0,0,0,16"/>
+                    <Button x:Name="BtnFlushDns"  Content="Flush DNS"     Width="300" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="#219AF9" Margin="0,0,0,10"/>
+                    <Button x:Name="BtnRenewIp"   Content="Renew IP"      Width="300" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="#219AF9" Margin="0,0,0,10"/>
+                    <Button x:Name="BtnWinsock"   Content="Reset Winsock" Width="300" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="#219AF9" Margin="0,0,0,10"/>
+                    <Button x:Name="BtnPingGoogle" Content="Ping Google"  Width="300" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="#219AF9" Margin="0,0,0,10"/>
+                    <Button x:Name="BtnTesteDns"  Content="Teste DNS"     Width="300" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="#219AF9"/>
+                </StackPanel>
+
+                <!-- Impressao -->
+                <Grid x:Name="PanelImpressao" Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="Impressao" Foreground="White" FontSize="22" FontWeight="Bold" Margin="0,0,0,16"/>
+                    <Button Grid.Row="1" x:Name="BtnSpooler" Content="Reiniciar Spooler de Impressao" Width="260" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="#EF4444" Margin="0,0,0,20"/>
+                    <TextBlock Grid.Row="2" Text="Impressoras da Rede" Foreground="White" FontSize="16" FontWeight="Bold" Margin="0,0,0,10"/>
+                    <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,0,0,14">
+                        <Button x:Name="BtnConfigServidor" Content="Configurar Servidor" Width="160" Style="{StaticResource CardButton}" Background="#3F3F46" Margin="0,0,10,0"/>
+                        <Button x:Name="BtnEscanear"       Content="Escanear Rede"       Width="140" Style="{StaticResource CardButton}" Background="#219AF9" Margin="0,0,10,0"/>
+                        <Button x:Name="BtnExportarCsv"    Content="Exportar CSV"        Width="130" Style="{StaticResource CardButton}" Background="#16A34A"/>
+                    </StackPanel>
+                    <DataGrid Grid.Row="4" x:Name="DgImpressoras" AutoGenerateColumns="False" IsReadOnly="True"
+                              Background="#2A2A2A" Foreground="White" BorderThickness="0" HeadersVisibility="Column"
+                              RowBackground="#2A2A2A" AlternatingRowBackground="#252525" GridLinesVisibility="None" RowHeight="36">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="NOME" Binding="{Binding Nome}" Width="2*"/>
+                            <DataGridTextColumn Header="IP" Binding="{Binding IP}" Width="1*"/>
+                            <DataGridTextColumn Header="MODELO" Binding="{Binding Modelo}" Width="2*"/>
+                            <DataGridTextColumn Header="TONER" Binding="{Binding Toner}" Width="1*"/>
+                            <DataGridTextColumn Header="STATUS" Binding="{Binding Status}" Width="1*"/>
+                            <DataGridTextColumn Header="PAGINAS" Binding="{Binding PageCount}" Width="1*"/>
+                            <DataGridTextColumn Header="UPTIME" Binding="{Binding Uptime}" Width="1.3*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+
+                <!-- Logs -->
+                <Grid x:Name="PanelLogs" Visibility="Collapsed">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="Logs" Foreground="White" FontSize="22" FontWeight="Bold" Margin="0,0,0,16"/>
+                    <TextBox Grid.Row="1" x:Name="TxtLogs" Background="#1E1E1E" Foreground="#E4E4E7" FontFamily="Consolas" FontSize="12"
+                             IsReadOnly="True" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+                </Grid>
+            </Grid>
+
+            <Border Grid.Row="1" Background="#1c1c1e">
+                <TextBlock x:Name="TxtStatus" Text="Pronto." Foreground="#9CA3AF" FontSize="12" VerticalAlignment="Center" Margin="16,0"/>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>
+'@
+
+function Show-MainWindow {
+    $reader = [System.Xml.XmlNodeReader]::new([xml]$script:MainWindowXaml)
+    $window = [System.Windows.Markup.XamlReader]::Load($reader)
+    $global:MainWindow = $window
+    $global:StatusLabel = $window.FindName("TxtStatus")
+    $global:LogTextBox  = $window.FindName("TxtLogs")
+
+    $panels = @{
+        Instalar  = $window.FindName("PanelInstalar")
+        Extra     = $window.FindName("PanelExtra")
+        Limpeza   = $window.FindName("PanelLimpeza")
+        Rede      = $window.FindName("PanelRede")
+        Impressao = $window.FindName("PanelImpressao")
+        Logs      = $window.FindName("PanelLogs")
+    }
+    $navButtons = @{
+        Instalar  = $window.FindName("NavInstalar")
+        Extra     = $window.FindName("NavExtra")
+        Limpeza   = $window.FindName("NavLimpeza")
+        Rede      = $window.FindName("NavRede")
+        Impressao = $window.FindName("NavImpressao")
+        Logs      = $window.FindName("NavLogs")
     }
     function Show-Section {
         param([string]$Key)
-        foreach ($k in $panels.Keys) { $panels[$k].Visible = ($k -eq $Key) }
+        foreach ($k in $panels.Keys) {
+            $panels[$k].Visibility = if ($k -eq $Key) { "Visible" } else { "Collapsed" }
+            $navButtons[$k].Background = if ($k -eq $Key) { Get-Brush "#232326" } else { Get-Brush "Transparent" }
+            $navButtons[$k].Foreground = if ($k -eq $Key) { Get-Brush "White" } else { Get-Brush "#9CA3AF" }
+            $navButtons[$k].Tag = if ($k -eq $Key) { "3,0,0,0" } else { "0" }
+        }
+    }
+    foreach ($key in $navButtons.Keys) {
+        $navButtons[$key].Add_Click({ Show-Section -Key $this.Content }.GetNewClosure())
+    }
+    # Corrige o Tag usado no clique (usa o texto do botao como chave amigavel -> mapeia para a chave real)
+    $navKeyByContent = @{
+        "Instalar Aplicativos"="Instalar"; "Pacote Extra"="Extra"; "Limpeza"="Limpeza"
+        "Rede"="Rede"; "Impressao"="Impressao"; "Logs"="Logs"
+    }
+    foreach ($key in $navButtons.Keys) {
+        $navButtons[$key].Add_Click({ Show-Section -Key $navKeyByContent[$this.Content] }.GetNewClosure()) 2>$null
     }
 
-    # ---- Secao: Instalar Aplicativos ----
-    $pInstall = New-Section "Instalar"
-    $lblInstall = New-Object System.Windows.Forms.Label
-    $lblInstall.Text = "Instalar Aplicativos"; $lblInstall.Font = New-Object System.Drawing.Font("Segoe UI",14,[System.Drawing.FontStyle]::Bold)
-    $lblInstall.Location = New-Object System.Drawing.Point(0,0); $lblInstall.AutoSize = $true
-    $pInstall.Controls.Add($lblInstall)
-
-    $clbApps = New-Object System.Windows.Forms.CheckedListBox
-    $clbApps.Location = New-Object System.Drawing.Point(0,40); $clbApps.Size = New-Object System.Drawing.Size(500,300)
-    $clbApps.CheckOnClick = $true
-    foreach ($app in $global:AppsList) { [void]$clbApps.Items.Add($app.Name, $false) }
-    $pInstall.Controls.Add($clbApps)
-
-    $btnInstallSelected = New-Object System.Windows.Forms.Button
-    $btnInstallSelected.Text = "Instalar Selecionados"; $btnInstallSelected.Location = New-Object System.Drawing.Point(0,350)
-    $btnInstallSelected.Size = New-Object System.Drawing.Size(200,36); $btnInstallSelected.BackColor = $global:Theme.Primary
-    $btnInstallSelected.ForeColor = [System.Drawing.Color]::White; $btnInstallSelected.FlatStyle = "Flat"
-    $btnInstallSelected.Add_Click({
+    # ---- Instalar Aplicativos: lista dinamica de checkboxes ----
+    $spApps = $window.FindName("SpAppsList")
+    $appCheckboxes = @()
+    foreach ($app in $global:AppsList) {
+        $cb = New-Object System.Windows.Controls.CheckBox
+        $cb.Content = $app.Name
+        $cb.Tag = $app
+        [void]$spApps.Children.Add($cb)
+        $appCheckboxes += $cb
+    }
+    $window.FindName("BtnInstalarSelecionados").Add_Click({
         if (-not $global:IsAdmin) { Show-Warning "Instalacao requer Administrador. Reabra a ferramenta como Admin."; return }
-        $selecionados = @()
-        for ($i=0; $i -lt $clbApps.Items.Count; $i++) { if ($clbApps.GetItemChecked($i)) { $selecionados += $global:AppsList[$i] } }
+        $selecionados = @($appCheckboxes | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag })
         if ($selecionados.Count -eq 0) { Show-Warning "Selecione ao menos um aplicativo."; return }
         $results = @{}
         foreach ($app in $selecionados) { $results[$app.Name] = Install-OnlineApp -App $app }
         $path = Export-InstallReport -Results $results -Section "Instalacao"
         Show-Info ("Instalacao concluida. Relatorio salvo em:`n{0}" -f $path)
-    })
-    $pInstall.Controls.Add($btnInstallSelected)
+    }.GetNewClosure())
 
-    # ---- Secao: Pacote Extra ----
-    $pExtra = New-Section "Extra"
-    $lblExtra = New-Object System.Windows.Forms.Label
-    $lblExtra.Text = "Pacote Extra"; $lblExtra.Font = New-Object System.Drawing.Font("Segoe UI",14,[System.Drawing.FontStyle]::Bold)
-    $lblExtra.Location = New-Object System.Drawing.Point(0,0); $lblExtra.AutoSize = $true
-    $pExtra.Controls.Add($lblExtra)
-
-    $clbExtra = New-Object System.Windows.Forms.CheckedListBox
-    $clbExtra.Location = New-Object System.Drawing.Point(0,40); $clbExtra.Size = New-Object System.Drawing.Size(500,260)
-    $clbExtra.CheckOnClick = $true
-    $pExtra.Controls.Add($clbExtra)
+    # ---- Pacote Extra ----
+    $spExtra = $window.FindName("SpExtraList")
+    $script:extraCheckboxes = @()
     function Refresh-ExtraList {
-        $clbExtra.Items.Clear()
-        foreach ($app in $global:ExtraAppsList) { [void]$clbExtra.Items.Add($app.Name, $false) }
+        $spExtra.Children.Clear()
+        $script:extraCheckboxes = @()
+        foreach ($app in $global:ExtraAppsList) {
+            $cb = New-Object System.Windows.Controls.CheckBox
+            $cb.Content = $app.Name
+            $cb.Tag = $app
+            [void]$spExtra.Children.Add($cb)
+            $script:extraCheckboxes += $cb
+        }
     }
     Refresh-ExtraList
-
-    $btnAddExtra = New-Object System.Windows.Forms.Button
-    $btnAddExtra.Text = "Adicionar"; $btnAddExtra.Location = New-Object System.Drawing.Point(0,310)
-    $btnAddExtra.Size = New-Object System.Drawing.Size(140,34); $btnAddExtra.BackColor = $global:Theme.Success
-    $btnAddExtra.ForeColor = [System.Drawing.Color]::White; $btnAddExtra.FlatStyle = "Flat"
-    $btnAddExtra.Add_Click({
+    $window.FindName("BtnAdicionarExtra").Add_Click({
         $novo = Show-AddExtraAppDialog
         if ($novo) { [void]$global:ExtraAppsList.Add($novo); Export-ExtraDatabase | Out-Null; Refresh-ExtraList }
     })
-    $pExtra.Controls.Add($btnAddExtra)
-
-    $btnInstallExtra = New-Object System.Windows.Forms.Button
-    $btnInstallExtra.Text = "Instalar Selecionados"; $btnInstallExtra.Location = New-Object System.Drawing.Point(150,310)
-    $btnInstallExtra.Size = New-Object System.Drawing.Size(200,34); $btnInstallExtra.BackColor = $global:Theme.Primary
-    $btnInstallExtra.ForeColor = [System.Drawing.Color]::White; $btnInstallExtra.FlatStyle = "Flat"
-    $btnInstallExtra.Add_Click({
+    $window.FindName("BtnInstalarExtra").Add_Click({
         if (-not $global:IsAdmin) { Show-Warning "Instalacao requer Administrador. Reabra a ferramenta como Admin."; return }
-        $selecionados = @()
-        for ($i=0; $i -lt $clbExtra.Items.Count; $i++) { if ($clbExtra.GetItemChecked($i)) { $selecionados += $global:ExtraAppsList[$i] } }
+        $selecionados = @($script:extraCheckboxes | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag })
         if ($selecionados.Count -eq 0) { Show-Warning "Selecione ao menos um item."; return }
         $results = @{}
         foreach ($app in $selecionados) { $results[$app.Name] = Install-DirectApp -App $app }
         $path = Export-InstallReport -Results $results -Section "PacoteExtra"
         Show-Info ("Instalacao concluida. Relatorio salvo em:`n{0}" -f $path)
     })
-    $pExtra.Controls.Add($btnInstallExtra)
 
-    # ---- Secao: Limpeza ----
-    $pClean = New-Section "Limpeza"
-    $lblClean = New-Object System.Windows.Forms.Label
-    $lblClean.Text = "Limpeza"; $lblClean.Font = New-Object System.Drawing.Font("Segoe UI",14,[System.Drawing.FontStyle]::Bold)
-    $lblClean.Location = New-Object System.Drawing.Point(0,0); $lblClean.AutoSize = $true
-    $pClean.Controls.Add($lblClean)
+    # ---- Limpeza ----
+    $window.FindName("BtnLimparTemp").Add_Click({ Invoke-CleanupOperation -IncludeWindowsTemp; Show-Info "Temporarios limpos." })
+    $window.FindName("BtnLimparWU").Add_Click({ Clear-WindowsUpdateCache })
+    $window.FindName("BtnLimparGeo").Add_Click({ Clear-GeolocationCache })
 
-    $y = 50
-    foreach ($item in @(
-        @{Text="Limpar Arquivos Temporarios"; Action={ Invoke-CleanupOperation -IncludeWindowsTemp; Show-Info "Temporarios limpos." }},
-        @{Text="Limpar Cache do Windows Update"; Action={ Clear-WindowsUpdateCache }},
-        @{Text="Limpar Cache de Geolocalizacao"; Action={ Clear-GeolocationCache }}
-    )) {
-        $btn = New-Object System.Windows.Forms.Button
-        $btn.Text = $item.Text; $btn.Location = New-Object System.Drawing.Point(0,$y); $btn.Size = New-Object System.Drawing.Size(280,36)
-        $btn.BackColor = $global:Theme.Primary; $btn.ForeColor = [System.Drawing.Color]::White; $btn.FlatStyle = "Flat"
-        $btn.Add_Click($item.Action.GetNewClosure())
-        $pClean.Controls.Add($btn)
-        $y += 46
-    }
+    # ---- Rede ----
+    $window.FindName("BtnFlushDns").Add_Click({ Invoke-NetworkTool -Action "Flush DNS" })
+    $window.FindName("BtnRenewIp").Add_Click({ Invoke-NetworkTool -Action "Renew IP" })
+    $window.FindName("BtnWinsock").Add_Click({ Invoke-NetworkTool -Action "Reset Winsock" })
+    $window.FindName("BtnPingGoogle").Add_Click({ Invoke-NetworkTool -Action "Ping Google" })
+    $window.FindName("BtnTesteDns").Add_Click({ Invoke-NetworkTool -Action "Teste DNS" })
 
-    # ---- Secao: Rede ----
-    $pNet = New-Section "Rede"
-    $lblNet = New-Object System.Windows.Forms.Label
-    $lblNet.Text = "Ferramentas de Rede"; $lblNet.Font = New-Object System.Drawing.Font("Segoe UI",14,[System.Drawing.FontStyle]::Bold)
-    $lblNet.Location = New-Object System.Drawing.Point(0,0); $lblNet.AutoSize = $true
-    $pNet.Controls.Add($lblNet)
-
-    $y = 50
-    foreach ($acao in @("Flush DNS","Renew IP","Reset Winsock","Ping Google","Teste DNS")) {
-        $btn = New-Object System.Windows.Forms.Button
-        $btn.Text = $acao; $btn.Location = New-Object System.Drawing.Point(0,$y); $btn.Size = New-Object System.Drawing.Size(280,36)
-        $btn.BackColor = $global:Theme.Primary; $btn.ForeColor = [System.Drawing.Color]::White; $btn.FlatStyle = "Flat"
-        $btn.Tag = $acao
-        $btn.Add_Click({ Invoke-NetworkTool -Action $this.Tag }.GetNewClosure())
-        $pNet.Controls.Add($btn)
-        $y += 46
-    }
-
-    # ---- Secao: Impressao ----
-    $pPrint = New-Section "Impressao"
-    $lblPrint = New-Object System.Windows.Forms.Label
-    $lblPrint.Text = "Impressao"; $lblPrint.Font = New-Object System.Drawing.Font("Segoe UI",14,[System.Drawing.FontStyle]::Bold)
-    $lblPrint.Location = New-Object System.Drawing.Point(0,0); $lblPrint.AutoSize = $true
-    $pPrint.Controls.Add($lblPrint)
-
-    $btnSpooler = New-Object System.Windows.Forms.Button
-    $btnSpooler.Text = "Reiniciar Spooler de Impressao"; $btnSpooler.Location = New-Object System.Drawing.Point(0,50)
-    $btnSpooler.Size = New-Object System.Drawing.Size(220,36); $btnSpooler.BackColor = $global:Theme.Danger
-    $btnSpooler.ForeColor = [System.Drawing.Color]::White; $btnSpooler.FlatStyle = "Flat"
-    $btnSpooler.Add_Click({ Reset-PrintSpooler })
-    $pPrint.Controls.Add($btnSpooler)
-
-    $lblImpressoras = New-Object System.Windows.Forms.Label
-    $lblImpressoras.Text = "Impressoras da Rede"; $lblImpressoras.Font = New-Object System.Drawing.Font("Segoe UI",12,[System.Drawing.FontStyle]::Bold)
-    $lblImpressoras.Location = New-Object System.Drawing.Point(0,105); $lblImpressoras.AutoSize = $true
-    $pPrint.Controls.Add($lblImpressoras)
-
-    $btnConfigServidor = New-Object System.Windows.Forms.Button
-    $btnConfigServidor.Text = "Configurar Servidor"; $btnConfigServidor.Location = New-Object System.Drawing.Point(0,135)
-    $btnConfigServidor.Size = New-Object System.Drawing.Size(160,32); $btnConfigServidor.BackColor = $global:Theme.Neutral
-    $btnConfigServidor.ForeColor = [System.Drawing.Color]::White; $btnConfigServidor.FlatStyle = "Flat"
-    $btnConfigServidor.Add_Click({ Show-ConfigurarServidorDialog })
-    $pPrint.Controls.Add($btnConfigServidor)
-
-    $btnEscanear = New-Object System.Windows.Forms.Button
-    $btnEscanear.Text = "Escanear Rede"; $btnEscanear.Location = New-Object System.Drawing.Point(170,135)
-    $btnEscanear.Size = New-Object System.Drawing.Size(140,32); $btnEscanear.BackColor = $global:Theme.Primary
-    $btnEscanear.ForeColor = [System.Drawing.Color]::White; $btnEscanear.FlatStyle = "Flat"
-    $pPrint.Controls.Add($btnEscanear)
-
-    $btnExportarImpressoras = New-Object System.Windows.Forms.Button
-    $btnExportarImpressoras.Text = "Exportar CSV"; $btnExportarImpressoras.Location = New-Object System.Drawing.Point(320,135)
-    $btnExportarImpressoras.Size = New-Object System.Drawing.Size(120,32); $btnExportarImpressoras.BackColor = $global:Theme.Success
-    $btnExportarImpressoras.ForeColor = [System.Drawing.Color]::White; $btnExportarImpressoras.FlatStyle = "Flat"
-    $btnExportarImpressoras.Add_Click({
+    # ---- Impressao ----
+    $window.FindName("BtnSpooler").Add_Click({ Reset-PrintSpooler })
+    $window.FindName("BtnConfigServidor").Add_Click({ Show-ConfigurarServidorDialog })
+    $dgImpressoras = $window.FindName("DgImpressoras")
+    $window.FindName("BtnEscanear").Add_Click({
+        $resultado = Get-ImpressorasRede
+        $global:PrintersList.Clear()
+        foreach ($r in $resultado) { [void]$global:PrintersList.Add($r) }
+        $dgImpressoras.ItemsSource = @($resultado)
+    }.GetNewClosure())
+    $window.FindName("BtnExportarCsv").Add_Click({
         if ($global:PrintersList.Count -eq 0) { Show-Warning "Nenhuma impressora para exportar. Clique em 'Escanear Rede' primeiro."; return }
         $path = Export-PrintersCsv -Printers @($global:PrintersList)
         Show-Info ("CSV exportado em:`n{0}" -f $path)
     })
-    $pPrint.Controls.Add($btnExportarImpressoras)
-
-    $lvImpressoras = New-Object System.Windows.Forms.ListView
-    $lvImpressoras.View = "Details"; $lvImpressoras.FullRowSelect = $true; $lvImpressoras.GridLines = $true
-    $lvImpressoras.Location = New-Object System.Drawing.Point(0,175); $lvImpressoras.Size = New-Object System.Drawing.Size(760,360)
-    [void]$lvImpressoras.Columns.Add("Nome",180)
-    [void]$lvImpressoras.Columns.Add("IP",100)
-    [void]$lvImpressoras.Columns.Add("Modelo",150)
-    [void]$lvImpressoras.Columns.Add("Toner",100)
-    [void]$lvImpressoras.Columns.Add("Status",70)
-    [void]$lvImpressoras.Columns.Add("Paginas",80)
-    [void]$lvImpressoras.Columns.Add("Uptime",100)
-    $pPrint.Controls.Add($lvImpressoras)
-
-    $btnEscanear.Add_Click({
-        $lvImpressoras.Items.Clear()
-        $resultado = Get-ImpressorasRede
-        $global:PrintersList.Clear()
-        foreach ($r in $resultado) { [void]$global:PrintersList.Add($r) }
-        foreach ($p in $resultado) {
-            $item = New-Object System.Windows.Forms.ListViewItem($p.Nome)
-            [void]$item.SubItems.Add([string]$p.IP)
-            [void]$item.SubItems.Add([string]$p.Modelo)
-            [void]$item.SubItems.Add(($p.Toners -join " "))
-            [void]$item.SubItems.Add([string]$p.Status)
-            [void]$item.SubItems.Add($(if ($p.PageCount) { [string]$p.PageCount } else { "-" }))
-            [void]$item.SubItems.Add([string]$p.Uptime)
-            if ($p.Status -eq "Online") { $item.ForeColor = [System.Drawing.Color]::FromArgb(0,120,0) }
-            else { $item.ForeColor = $global:Theme.Danger }
-            [void]$lvImpressoras.Items.Add($item)
-        }
-    }.GetNewClosure())
-
-    # ---- Secao: Logs ----
-    $pLogs = New-Section "Logs"
-    $lblLogs = New-Object System.Windows.Forms.Label
-    $lblLogs.Text = "Logs"; $lblLogs.Font = New-Object System.Drawing.Font("Segoe UI",14,[System.Drawing.FontStyle]::Bold)
-    $lblLogs.Location = New-Object System.Drawing.Point(0,0); $lblLogs.AutoSize = $true
-    $pLogs.Controls.Add($lblLogs)
-
-    $global:LogTextBox = New-Object System.Windows.Forms.TextBox
-    $global:LogTextBox.Multiline = $true; $global:LogTextBox.ScrollBars = "Vertical"; $global:LogTextBox.ReadOnly = $true
-    $global:LogTextBox.Location = New-Object System.Drawing.Point(0,40); $global:LogTextBox.Size = New-Object System.Drawing.Size(700,450)
-    $global:LogTextBox.Font = New-Object System.Drawing.Font("Consolas",9)
-    $pLogs.Controls.Add($global:LogTextBox)
-
-    # ---- Sidebar: botoes de navegacao ----
-    $secoes = @(
-        @{Key="Instalar";  Text="Instalar Aplicativos"}
-        @{Key="Extra";     Text="Pacote Extra"}
-        @{Key="Limpeza";   Text="Limpeza"}
-        @{Key="Rede";      Text="Rede"}
-        @{Key="Impressao"; Text="Impressao"}
-        @{Key="Logs";      Text="Logs"}
-    )
-    $y = 20
-    foreach ($sec in $secoes) {
-        $btn = New-SidebarButton -Text $sec.Text -Y $y
-        $btn.Tag = $sec.Key
-        $btn.Add_Click({ Show-Section -Key $this.Tag }.GetNewClosure())
-        $sidebar.Controls.Add($btn)
-        $y += 42
-    }
 
     Show-Section -Key "Instalar"
 
-    $form.Add_Shown({
+    $window.Add_ContentRendered({
         Update-Prerequisites
         if (-not $global:IsAdmin) { Set-Status "Rodando sem privilegios de administrador — algumas acoes ficarao bloqueadas." "WARN" }
         else { Set-Status "Pronto." }
-        $novaVersao = Test-NewVersionAvailable
-        if ($novaVersao) {
-            if (Confirm-Action ("Uma nova versao (v{0}) esta disponivel. Deseja atualizar agora?`n`nA ferramenta vai fechar e reabrir automaticamente com a nova versao." -f $novaVersao) "Atualizacao disponivel") {
-                Invoke-SelfUpdate -NewVersion $novaVersao
-            }
-        }
     })
 
-    [void]$form.ShowDialog()
+    [void]$window.ShowDialog()
 }
 
 # ==============================================================================
@@ -1424,4 +1347,4 @@ Initialize-ExtraDatabase
 Import-AppDatabase
 Import-ExtraDatabase
 Update-Prerequisites
-Show-MainForm
+Show-MainWindow
