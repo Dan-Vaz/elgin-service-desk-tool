@@ -1533,11 +1533,59 @@ function Obter-Modelo {
 function Get-ImpressorasRede {
     $cfg = Get-PrinterConfig
     Set-Status ("Consultando spooler em '{0}'..." -f $cfg.ServidorPrint)
+
+    # Get-PrinterPort/Get-Printer -ComputerName sao chamadas RPC sincronas -
+    # contra um servidor inacessivel podem travar por MINUTOS (timeout de RPC
+    # do Windows), o que parece "a ferramenta travou/fechou" pro usuario.
+    # Rodar numa runspace do MESMO processo nao resolve: .Stop()/.Dispose()
+    # numa runspace presa numa chamada nativa bloqueante tambem trava (nao da
+    # pra interromper uma thread a forca em .NET). A unica forma confiavel de
+    # limitar isso e rodar num PROCESSO filho de verdade e matar o processo
+    # (Process.Kill funciona mesmo com a thread presa em codigo nativo).
+    $ports = $null; $printers = $null; $consultaOk = $false; $erroConsulta = ""
+    $tempOut = Join-Path $env:TEMP ("elgin_printquery_" + [guid]::NewGuid().ToString("N").Substring(0,8) + ".json")
+    $tempScript = Join-Path $env:TEMP ("elgin_printquery_" + [guid]::NewGuid().ToString("N").Substring(0,8) + ".ps1")
+    $proc = $null
     try {
-        $ports    = Get-PrinterPort -ComputerName $cfg.ServidorPrint -ErrorAction Stop
-        $printers = Get-Printer -ComputerName $cfg.ServidorPrint -ErrorAction Stop
-    } catch {
-        Write-Log -Message ("[PRINT] Servidor '{0}' inacessivel: {1}" -f $cfg.ServidorPrint,$_.Exception.Message) -Level "ERROR"
+        $scriptBody = @'
+param([string]$Servidor,[string]$OutFile)
+try {
+    $ports    = Get-PrinterPort -ComputerName $Servidor -ErrorAction Stop
+    $printers = Get-Printer -ComputerName $Servidor -ErrorAction Stop
+    [PSCustomObject]@{ Ok=$true; Ports=@($ports); Printers=@($printers) } | ConvertTo-Json -Depth 6 -Compress | Out-File -LiteralPath $OutFile -Encoding UTF8
+} catch {
+    [PSCustomObject]@{ Ok=$false; Error=$_.Exception.Message } | ConvertTo-Json -Compress | Out-File -LiteralPath $OutFile -Encoding UTF8
+}
+'@
+        Set-Content -LiteralPath $tempScript -Value $scriptBody -Encoding UTF8 -Force
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName  = "powershell.exe"
+        $psi.Arguments = ConvertTo-ProcessArgumentString -Arguments @("-NoProfile","-NonInteractive","-File",$tempScript,$cfg.ServidorPrint,$tempOut)
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow  = $true
+        $psi.WindowStyle     = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        $proc = New-Object System.Diagnostics.Process
+        $proc.StartInfo = $psi
+        [void]$proc.Start()
+        if ($proc.WaitForExit(12000)) {
+            if (Test-Path $tempOut) {
+                $res = Get-Content -LiteralPath $tempOut -Raw | ConvertFrom-Json
+                if ($res.Ok) { $ports = @($res.Ports); $printers = @($res.Printers); $consultaOk = $true }
+                else { $erroConsulta = [string]$res.Error }
+            } else { $erroConsulta = "Processo de consulta nao gerou resultado." }
+        } else {
+            $erroConsulta = "Timeout apos 12s consultando o servidor de impressao."
+            try { $proc.Kill() } catch {}
+        }
+    } catch { $erroConsulta = $_.Exception.Message }
+    finally {
+        if ($proc -ne $null) { try { $proc.Dispose() } catch {} }
+        if (Test-Path $tempScript) { Remove-Item $tempScript -Force -EA SilentlyContinue }
+        if (Test-Path $tempOut)    { Remove-Item $tempOut -Force -EA SilentlyContinue }
+    }
+
+    if (-not $consultaOk) {
+        Write-Log -Message ("[PRINT] Servidor '{0}' inacessivel: {1}" -f $cfg.ServidorPrint,$erroConsulta) -Level "ERROR"
         if (Test-Path $global:PrinterCacheFile) {
             try {
                 $cache = Get-Content $global:PrinterCacheFile -Raw | ConvertFrom-Json
@@ -2391,7 +2439,7 @@ $script:XamlPanelsC = @'
 </Window>
 '@
 
-$script:LoadingOverlayXaml = @'
+$global:LoadingOverlayXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Escaneando" Height="140" Width="380"
@@ -2917,6 +2965,20 @@ function Show-MainWindow {
     $global:MainWindow = $window
     $window.Title = "{0} v{1}" -f $global:AppName,$global:AppVersion
 
+    # Para-quedas global: sem isso, qualquer excecao nao tratada dentro de um
+    # Add_Click (ex.: winget indisponivel, servidor de impressao inacessivel,
+    # etc.) propaga pro Dispatcher do WPF e derruba o processo inteiro sem
+    # aviso - e exatamente o "a ferramenta fecha sozinha" que acontecia antes
+    # desta linha existir. Mostra o erro e mantem a janela aberta.
+    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.add_UnhandledException({
+        param($senderObj,$e)
+        try {
+            Write-Log -Message ("[FATAL] Excecao nao tratada: {0}" -f $e.Exception.Message) -Level "ERROR"
+            Show-ErrorBox ("Ocorreu um erro inesperado, mas a ferramenta continua aberta.`n`nDetalhe: {0}" -f $e.Exception.Message)
+        } catch {}
+        $e.Handled = $true
+    })
+
     $prefs = Get-UiPrefs
     Set-AppTheme -Theme $prefs.Theme
 
@@ -3077,9 +3139,11 @@ function Show-MainWindow {
             if ($temChildren) { $cb.FontWeight = "Bold"; $cb.Foreground = Get-ThemeBrush "BrushAccent" }
             if ($global:ChecklistState.ContainsKey([string]$item.Id)) { $cb.IsChecked = [bool]$global:ChecklistState[[string]$item.Id] }
             $cb.Add_Click({
-                $global:ChecklistState[[string]$cb.Tag] = [bool]$cb.IsChecked
-                Save-ChecklistState -State $global:ChecklistState
-                & $UpdateChecklistProgress
+                try {
+                    $global:ChecklistState[[string]$cb.Tag] = [bool]$cb.IsChecked
+                    Save-ChecklistState -State $global:ChecklistState
+                    & $UpdateChecklistProgress
+                } catch { Write-Log -Message ("[CHECKLIST] Falha ao marcar item: {0}" -f $_.Exception.Message) -Level "ERROR"; Show-ErrorBox $_.Exception.Message }
             }.GetNewClosure())
             [void]$Parent.Children.Add($cb)
             $global:ChecklistCheckboxes += $cb
@@ -3090,9 +3154,11 @@ function Show-MainWindow {
                 $ccb.Margin = "26,0,0,8"
                 if ($global:ChecklistState.ContainsKey([string]$child.Id)) { $ccb.IsChecked = [bool]$global:ChecklistState[[string]$child.Id] }
                 $ccb.Add_Click({
-                    $global:ChecklistState[[string]$ccb.Tag] = [bool]$ccb.IsChecked
-                    Save-ChecklistState -State $global:ChecklistState
-                    & $UpdateChecklistProgress
+                    try {
+                        $global:ChecklistState[[string]$ccb.Tag] = [bool]$ccb.IsChecked
+                        Save-ChecklistState -State $global:ChecklistState
+                        & $UpdateChecklistProgress
+                    } catch { Write-Log -Message ("[CHECKLIST] Falha ao marcar item: {0}" -f $_.Exception.Message) -Level "ERROR"; Show-ErrorBox $_.Exception.Message }
                 }.GetNewClosure())
                 [void]$Parent.Children.Add($ccb)
                 $global:ChecklistCheckboxes += $ccb
@@ -3106,11 +3172,13 @@ function Show-MainWindow {
     & $UpdateChecklistProgress
 
     $window.FindName("BtnResetarChecklist").Add_Click({
-        if (-not (Confirm-Action "Isso vai desmarcar todos os itens do checklist. Deseja continuar?" "Resetar Checklist")) { return }
-        $global:ChecklistState = @{}
-        Save-ChecklistState -State $global:ChecklistState
-        foreach ($cb in $global:ChecklistCheckboxes) { $cb.IsChecked = $false }
-        & $UpdateChecklistProgress
+        try {
+            if (-not (Confirm-Action "Isso vai desmarcar todos os itens do checklist. Deseja continuar?" "Resetar Checklist")) { return }
+            $global:ChecklistState = @{}
+            Save-ChecklistState -State $global:ChecklistState
+            foreach ($cb in $global:ChecklistCheckboxes) { $cb.IsChecked = $false }
+            & $UpdateChecklistProgress
+        } catch { Write-Log -Message ("[CHECKLIST] Falha ao resetar: {0}" -f $_.Exception.Message) -Level "ERROR"; Show-ErrorBox $_.Exception.Message }
     }.GetNewClosure())
 
     # ---- Instalar Aplicativos ----
@@ -3333,7 +3401,7 @@ function Show-MainWindow {
         if (-not $Silencioso) {
             $btnEscanearRef = $window.FindName("BtnEscanear")
             $btnEscanearRef.IsEnabled = $false
-            $overlayReader = [System.Xml.XmlNodeReader]::new([xml]$script:LoadingOverlayXaml)
+            $overlayReader = [System.Xml.XmlNodeReader]::new([xml]$global:LoadingOverlayXaml)
             $overlay = [System.Windows.Markup.XamlReader]::Load($overlayReader)
             $overlay.Owner = $global:MainWindow
             Set-DialogTheme -Dialog $overlay
@@ -3346,6 +3414,9 @@ function Show-MainWindow {
             foreach ($r in $resultado) { [void]$global:PrintersList.Add($r) }
             & $ApplyPrinterFilter
             & $UpdatePrinterStats
+        } catch {
+            Write-Log -Message ("[PRINT] Falha ao escanear: {0}" -f $_.Exception.Message) -Level "ERROR"
+            if (-not $Silencioso) { Show-ErrorBox ("Falha ao escanear a rede de impressoras.`n`n{0}" -f $_.Exception.Message) }
         } finally {
             if ($overlay -ne $null) { $overlay.Close() }
             if (-not $Silencioso) { $window.FindName("BtnEscanear").IsEnabled = $true }
