@@ -1,0 +1,30 @@
+name: Build and Release
+
+# Dispara ao empurrar uma tag "vX.Y.Z" (ex.: v1.0.1).
+# Antes de taguear: atualize version.json e $global:AppVersion no
+# ServiceDeskTool.ps1 para o mesmo numero, commit, so entao crie a tag.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compilar ServiceDeskTool.exe
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}" -replace '^v',''
+          ./Build-Exe.ps1 -Version $ver
+
+      - name: Publicar Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bin/ServiceDeskTool.exe
+          generate_release_notes: true
