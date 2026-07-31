@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.1.1"
+$global:AppVersion    = "3.2"
 $global:SchemaVersion = 1
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
@@ -1198,24 +1198,29 @@ function Clear-GeolocationCache {
 function Invoke-NetworkTool {
     param([string]$Action)
     if (-not $global:IsAdmin -and $Action -in @("Reset Winsock","Renew IP")) { Show-Warning "Esta acao requer Administrador."; return }
-    switch ($Action) {
-        "Flush DNS"     { Invoke-ConsoleCommand "ipconfig /flushdns" "[NETWORK] Flush DNS" 60 | Out-Null; Show-Info "Cache DNS limpo." }
-        "Renew IP"      { Invoke-ConsoleCommand "ipconfig /release & ipconfig /renew" "[NETWORK] Renew IP" 120 | Out-Null; Show-Info "IP renovado." }
-        "Reset Winsock" { Invoke-ConsoleCommand "netsh winsock reset" "[NETWORK] Reset Winsock" 120 | Out-Null; Show-Info "Reset Winsock executado. Reinicie o computador." }
-        "Ping Google"   { $r=Invoke-ConsoleCommand "ping 8.8.8.8 -n 4" "[NETWORK] Ping" 60; Show-Info $r.Output "Resultado do Ping" }
-        "Teste DNS"     { $r=Invoke-ConsoleCommand "nslookup google.com" "[NETWORK] DNS" 60; Show-Info ($r.Output+$r.Error) "Resultado DNS" }
-    }
+    $ov = Show-BusyOverlay -Text ("{0}..." -f $Action)
+    try {
+        switch ($Action) {
+            "Flush DNS"     { Invoke-ConsoleCommand "ipconfig /flushdns" "[NETWORK] Flush DNS" 60 | Out-Null; Show-Info "Cache DNS limpo." }
+            "Renew IP"      { Invoke-ConsoleCommand "ipconfig /release & ipconfig /renew" "[NETWORK] Renew IP" 120 | Out-Null; Show-Info "IP renovado." }
+            "Reset Winsock" { Invoke-ConsoleCommand "netsh winsock reset" "[NETWORK] Reset Winsock" 120 | Out-Null; Show-Info "Reset Winsock executado. Reinicie o computador." }
+            "Ping Google"   { $r=Invoke-ConsoleCommand "ping 8.8.8.8 -n 4" "[NETWORK] Ping" 60; Show-Info $r.Output "Resultado do Ping" }
+            "Teste DNS"     { $r=Invoke-ConsoleCommand "nslookup google.com" "[NETWORK] DNS" 60; Show-Info ($r.Output+$r.Error) "Resultado DNS" }
+        }
+    } finally { Close-BusyOverlay -Overlay $ov }
 }
 
 function Reset-PrintSpooler {
     if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
+    $ov = Show-BusyOverlay -Text "Reiniciando spooler de impressao..."
     try {
         Stop-Service spooler -Force -EA SilentlyContinue
         $spool=Join-Path $env:SystemRoot "System32\spool\PRINTERS"
         if (Test-Path $spool) { Get-ChildItem $spool -Force -EA SilentlyContinue | Remove-Item -Force -Recurse -EA SilentlyContinue }
         Start-Service spooler -EA SilentlyContinue
         Write-Log -Message "[PRINT] Spooler reiniciado e fila limpa." -Level "SUCCESS"; Show-Info "Spooler reiniciado e fila de impressao limpa."
-    } catch { Show-ErrorBox ("Falha ao reiniciar spooler.`n`n{0}" -f $_.Exception.Message) }
+    } catch { Show-ErrorBox ("Falha ao reiniciar spooler.`n`n{0}" -f $_.Exception.Message)
+    } finally { Close-BusyOverlay -Overlay $ov }
 }
 
 # Remove componentes de IA/Copilot do Windows via script de terceiro
@@ -2466,17 +2471,43 @@ $script:XamlPanelsC = @'
 $global:LoadingOverlayXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Escaneando" Height="140" Width="380"
+        Title="Carregando" Height="140" Width="380"
         WindowStartupLocation="CenterOwner" WindowStyle="None" ResizeMode="NoResize"
         Background="{DynamicResource BrushSurface}">
     <Border BorderBrush="{DynamicResource BrushBorder}" BorderThickness="1" CornerRadius="10">
         <StackPanel Margin="20" VerticalAlignment="Center">
-            <TextBlock x:Name="TxtLoadingStatus" Text="Escaneando impressoras..." Foreground="{DynamicResource BrushText}" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,12"/>
+            <TextBlock x:Name="TxtLoadingStatus" Text="Carregando..." Foreground="{DynamicResource BrushText}" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,12"/>
             <ProgressBar IsIndeterminate="True" Height="4" Background="{DynamicResource BrushSurfaceAlt}" Foreground="{DynamicResource BrushAccent}" BorderThickness="0"/>
         </StackPanel>
     </Border>
 </Window>
 '@
+
+# Overlay generico "carregando" usado por qualquer acao que bloqueia a
+# thread da UI por mais de uma fracao de segundo (a app e single-thread,
+# entao sem isso a janela principal so parece congelada). Nao e modal
+# (.Show(), nao .ShowDialog()) e um unico Dispatcher.Invoke com prioridade
+# Render forca o overlay a desenhar antes do trabalho bloqueante comecar -
+# ele nao anima durante o trabalho em si (mesma limitacao de thread unica),
+# mas deixa claro que a acao esta em andamento e nao que a ferramenta travou.
+function Show-BusyOverlay {
+    param([string]$Text = "Carregando...")
+    try {
+        $overlayReader = [System.Xml.XmlNodeReader]::new([xml]$global:LoadingOverlayXaml)
+        $overlay = [System.Windows.Markup.XamlReader]::Load($overlayReader)
+        $overlay.Owner = $global:MainWindow
+        Set-DialogTheme -Dialog $overlay
+        $overlay.FindName("TxtLoadingStatus").Text = $Text
+        $overlay.Show()
+        $overlay.Dispatcher.Invoke([System.Action]{}, [System.Windows.Threading.DispatcherPriority]::Render)
+        return $overlay
+    } catch { return $null }
+}
+
+function Close-BusyOverlay {
+    param($Overlay)
+    if ($Overlay -ne $null) { try { $Overlay.Close() } catch {} }
+}
 
 # ==============================================================================
 # FERRAMENTAS - reparos do Windows, desinstalador seguro, cache de
@@ -2573,14 +2604,18 @@ function Invoke-SafeUninstall {
     param([Parameter(Mandatory=$true)]$Program)
     if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return $false }
     if (-not (Confirm-Action ("Desinstalar '{0}'?`n`nEssa acao abre o desinstalador oficial do programa e nao pode ser desfeita." -f $Program.Name) "Desinstalador Seguro")) { return $false }
+    $ov = $null
     try {
         Set-Status ("Desinstalando {0}..." -f $Program.Name)
+        $ov = Show-BusyOverlay -Text ("Desinstalando {0}... (se abrir uma janela propria, siga as instrucoes nela)" -f $Program.Name)
         Write-Log -Message ("[UNINSTALL] {0}: {1}" -f $Program.Name,$Program.UninstallCmd) -Level "INFO"
         $r = Invoke-ConsoleCommand $Program.UninstallCmd ("[UNINSTALL] {0}" -f $Program.Name) 600
         Write-Log -Message ("[UNINSTALL] {0} finalizado. ExitCode {1}" -f $Program.Name,$r.ExitCode) -Level "SUCCESS"
+        Close-BusyOverlay -Overlay $ov; $ov = $null
         Show-Info ("Desinstalacao de '{0}' finalizada. Se o desinstalador abriu uma janela propria, siga as instrucoes nela." -f $Program.Name)
         return $true
-    } catch { Show-ErrorBox ("Falha ao desinstalar.`n`n{0}" -f $_.Exception.Message); return $false }
+    } catch { Show-ErrorBox ("Falha ao desinstalar.`n`n{0}" -f $_.Exception.Message); return $false
+    } finally { Close-BusyOverlay -Overlay $ov }
 }
 
 # ---- CONFIGURACOES DA FERRAMENTA ----
@@ -2621,14 +2656,18 @@ function Clear-BrowserCaches {
 # ---- LIMPEZA DO SISTEMA (avancada) ----
 function Clear-PrefetchCache {
     if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
-    $p = Join-Path $env:WINDIR "Prefetch"
-    if (Test-Path $p) { Get-ChildItem $p -Force -EA SilentlyContinue | Remove-Item -Force -Recurse -EA SilentlyContinue }
-    Write-Log -Message "[CLEANUP] Cache de Prefetch limpo." -Level "SUCCESS"
+    $ov = Show-BusyOverlay -Text "Limpando cache de Prefetch..."
+    try {
+        $p = Join-Path $env:WINDIR "Prefetch"
+        if (Test-Path $p) { Get-ChildItem $p -Force -EA SilentlyContinue | Remove-Item -Force -Recurse -EA SilentlyContinue }
+        Write-Log -Message "[CLEANUP] Cache de Prefetch limpo." -Level "SUCCESS"
+    } finally { Close-BusyOverlay -Overlay $ov }
     Show-Info "Cache de Prefetch limpo."
 }
 
 function Clear-FontCacheData {
     if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
+    $ov = Show-BusyOverlay -Text "Limpando cache de fontes..."
     try {
         Stop-Service -Name "FontCache" -Force -EA SilentlyContinue
         Start-Sleep -Seconds 1
@@ -2639,35 +2678,41 @@ function Clear-FontCacheData {
         Start-Service -Name "FontCache" -EA SilentlyContinue
         Write-Log -Message "[CLEANUP] Cache de fontes limpo e servico reiniciado." -Level "SUCCESS"
         Show-Info "Cache de fontes limpo."
-    } catch { Show-ErrorBox ("Falha ao limpar cache de fontes.`n`n{0}" -f $_.Exception.Message) }
+    } catch { Show-ErrorBox ("Falha ao limpar cache de fontes.`n`n{0}" -f $_.Exception.Message)
+    } finally { Close-BusyOverlay -Overlay $ov }
 }
 
 function Get-ShadowCopiesInfo {
     if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return "" }
-    $r = Invoke-ConsoleCommand "vssadmin list shadows" "[REPAIR] vssadmin list shadows" 30
+    $ov = Show-BusyOverlay -Text "Consultando shadow copies..."
+    try { $r = Invoke-ConsoleCommand "vssadmin list shadows" "[REPAIR] vssadmin list shadows" 30 } finally { Close-BusyOverlay -Overlay $ov }
     return $r.Output
 }
 
 function Invoke-DismComponentCleanup {
     if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
     Set-Status "Executando limpeza de componentes WinSxS - isso pode levar varios minutos..."
-    $r = Invoke-ConsoleCommand "DISM /Online /Cleanup-Image /StartComponentCleanup" "[REPAIR] DISM StartComponentCleanup" 1800
+    $ov = Show-BusyOverlay -Text "Executando limpeza de componentes WinSxS - isso pode levar varios minutos..."
+    try { $r = Invoke-ConsoleCommand "DISM /Online /Cleanup-Image /StartComponentCleanup" "[REPAIR] DISM StartComponentCleanup" 1800 } finally { Close-BusyOverlay -Overlay $ov }
     Show-TextResultDialog -Title "Resultado - WinSxS / DISM Cleanup" -Text $r.Output
 }
 
 # ---- REDE AVANCADA ----
 function Get-WifiProfilesInfo {
-    $r = Invoke-ConsoleCommand "netsh wlan show profiles" "[NETWORK] Perfis Wi-Fi" 20
+    $ov = Show-BusyOverlay -Text "Consultando perfis de Wi-Fi..."
+    try { $r = Invoke-ConsoleCommand "netsh wlan show profiles" "[NETWORK] Perfis Wi-Fi" 20 } finally { Close-BusyOverlay -Overlay $ov }
     return $r.Output
 }
 
 function Get-NetworkConnectionsInfo {
-    $r = Invoke-ConsoleCommand "netstat -ano" "[NETWORK] Conexoes/Portas" 30
+    $ov = Show-BusyOverlay -Text "Consultando conexoes e portas..."
+    try { $r = Invoke-ConsoleCommand "netstat -ano" "[NETWORK] Conexoes/Portas" 30 } finally { Close-BusyOverlay -Overlay $ov }
     return $r.Output
 }
 
 function Get-MappedDrivesInfo {
-    $r = Invoke-ConsoleCommand "net use" "[NETWORK] Unidades mapeadas" 20
+    $ov = Show-BusyOverlay -Text "Consultando unidades mapeadas..."
+    try { $r = Invoke-ConsoleCommand "net use" "[NETWORK] Unidades mapeadas" 20 } finally { Close-BusyOverlay -Overlay $ov }
     return $r.Output
 }
 
@@ -2778,7 +2823,9 @@ function Show-UninstallerDialog {
     Set-DialogTheme -Dialog $dlg
 
     Set-Status "Lendo programas instalados..."
+    $ovUninstall = Show-BusyOverlay -Text "Lendo programas instalados..."
     $todosOsProgramas = @(Get-InstalledProgramsList)
+    Close-BusyOverlay -Overlay $ovUninstall
     Set-Status ("{0} programa(s) encontrado(s)." -f $todosOsProgramas.Count) "SUCCESS"
 
     $dg = $dlg.FindName("DgProgramas")
@@ -3256,15 +3303,27 @@ function Show-MainWindow {
         } else { $txtWingetStatus.Text = "Winget: nao instalado" }
         $txtChocoStatus.Text = if ($global:HasChoco) { "Chocolatey: instalado" } else { "Chocolatey: nao instalado" }
     }.GetNewClosure()
-    $window.FindName("BtnInstalarWinget").Add_Click({ Install-WingetPackageManager; & $RefreshPkgMgrStatus }.GetNewClosure())
-    $window.FindName("BtnRepararWinget").Add_Click({
-        $r = Repair-Winget
-        if ($r.Missing) { Show-Warning "Winget nao esta instalado. Use 'Instalar Winget' primeiro." }
-        elseif ($r.Ok) { Show-Info "Winget reparado com sucesso." }
-        else { Show-Warning "Nao foi possivel reparar o winget automaticamente. Verifique os Logs." }
-        & $RefreshPkgMgrStatus
+    $window.FindName("BtnInstalarWinget").Add_Click({
+        $btn = $window.FindName("BtnInstalarWinget"); $btn.IsEnabled = $false
+        $ov = Show-BusyOverlay -Text "Instalando Winget (App Installer)..."
+        try { Install-WingetPackageManager; & $RefreshPkgMgrStatus } finally { Close-BusyOverlay -Overlay $ov; $btn.IsEnabled = $true }
     }.GetNewClosure())
-    $window.FindName("BtnInstalarChoco").Add_Click({ Install-ChocolateyPackageManager; & $RefreshPkgMgrStatus }.GetNewClosure())
+    $window.FindName("BtnRepararWinget").Add_Click({
+        $btn = $window.FindName("BtnRepararWinget"); $btn.IsEnabled = $false
+        $ov = Show-BusyOverlay -Text "Reparando Winget..."
+        try {
+            $r = Repair-Winget
+            if ($r.Missing) { Show-Warning "Winget nao esta instalado. Use 'Instalar Winget' primeiro." }
+            elseif ($r.Ok) { Show-Info "Winget reparado com sucesso." }
+            else { Show-Warning "Nao foi possivel reparar o winget automaticamente. Verifique os Logs." }
+            & $RefreshPkgMgrStatus
+        } finally { Close-BusyOverlay -Overlay $ov; $btn.IsEnabled = $true }
+    }.GetNewClosure())
+    $window.FindName("BtnInstalarChoco").Add_Click({
+        $btn = $window.FindName("BtnInstalarChoco"); $btn.IsEnabled = $false
+        $ov = Show-BusyOverlay -Text "Instalando Chocolatey..."
+        try { Install-ChocolateyPackageManager; & $RefreshPkgMgrStatus } finally { Close-BusyOverlay -Overlay $ov; $btn.IsEnabled = $true }
+    }.GetNewClosure())
 
     $spApps = $window.FindName("SpAppsList")
     $appCheckboxes = @()
@@ -3290,8 +3349,17 @@ function Show-MainWindow {
         if (-not $global:IsAdmin) { Show-Warning "Instalacao requer Administrador. Reabra a ferramenta como Admin."; return }
         $selecionados = @($appCheckboxes | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag })
         if ($selecionados.Count -eq 0) { Show-Warning "Selecione ao menos um aplicativo."; return }
-        $results = @{}
-        foreach ($app in $selecionados) { $results[$app.Name] = Install-OnlineApp -App $app }
+        $ov = Show-BusyOverlay -Text "Instalando aplicativos..."
+        $txtOv = if ($ov -ne $null) { $ov.FindName("TxtLoadingStatus") } else { $null }
+        try {
+            $results = @{}
+            $i = 0
+            foreach ($app in $selecionados) {
+                $i++
+                if ($txtOv -ne $null) { $txtOv.Text = "Instalando {0}/{1}: {2}..." -f $i,$selecionados.Count,$app.Name; $ov.Dispatcher.Invoke([System.Action]{}, [System.Windows.Threading.DispatcherPriority]::Render) }
+                $results[$app.Name] = Install-OnlineApp -App $app
+            }
+        } finally { Close-BusyOverlay -Overlay $ov }
         $path = Export-InstallReport -Results $results -Section "Instalacao"
         Show-Info ("Instalacao concluida. Relatorio salvo em:`n{0}" -f $path)
     }.GetNewClosure())
@@ -3304,7 +3372,8 @@ function Show-MainWindow {
         $q = $txtBuscaOnline.Text.Trim()
         if ([string]::IsNullOrWhiteSpace($q)) { Show-Warning "Digite um termo de busca."; return }
         Set-Status ("Buscando '{0}'..." -f $q)
-        $rows = Search-SoftwarePackages -Query $q
+        $ov = Show-BusyOverlay -Text ("Buscando '{0}'..." -f $q)
+        try { $rows = Search-SoftwarePackages -Query $q } finally { Close-BusyOverlay -Overlay $ov }
         $spBuscaResultados.Children.Clear()
         $global:BuscaCheckboxes = @()
         if (@($rows).Count -eq 0) {
@@ -3329,16 +3398,23 @@ function Show-MainWindow {
         if (-not $global:IsAdmin) { Show-Warning "Instalacao requer Administrador."; return }
         $selecionados = @($global:BuscaCheckboxes | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag })
         if ($selecionados.Count -eq 0) { Show-Warning "Selecione ao menos um item da busca."; return }
-        $results = @{}
-        foreach ($row in $selecionados) {
-            $appObj = [PSCustomObject]@{
-                Name = $row.Name
-                Winget = if ($row.Source -eq "Winget") { $row.Id } else { "" }
-                Choco = if ($row.Source -eq "Chocolatey") { $row.Id } else { "" }
-                Scope = ""; TimeoutSeconds = 1800
+        $ov = Show-BusyOverlay -Text "Instalando aplicativos..."
+        $txtOv = if ($ov -ne $null) { $ov.FindName("TxtLoadingStatus") } else { $null }
+        try {
+            $results = @{}
+            $i = 0
+            foreach ($row in $selecionados) {
+                $i++
+                if ($txtOv -ne $null) { $txtOv.Text = "Instalando {0}/{1}: {2}..." -f $i,$selecionados.Count,$row.Name; $ov.Dispatcher.Invoke([System.Action]{}, [System.Windows.Threading.DispatcherPriority]::Render) }
+                $appObj = [PSCustomObject]@{
+                    Name = $row.Name
+                    Winget = if ($row.Source -eq "Winget") { $row.Id } else { "" }
+                    Choco = if ($row.Source -eq "Chocolatey") { $row.Id } else { "" }
+                    Scope = ""; TimeoutSeconds = 1800
+                }
+                $results[$row.Name] = Install-OnlineApp -App $appObj
             }
-            $results[$row.Name] = Install-OnlineApp -App $appObj
-        }
+        } finally { Close-BusyOverlay -Overlay $ov }
         $path = Export-InstallReport -Results $results -Section "BuscaOnline"
         Show-Info ("Instalacao concluida. Relatorio salvo em:`n{0}" -f $path)
     }.GetNewClosure())
@@ -3366,8 +3442,17 @@ function Show-MainWindow {
         if (-not $global:IsAdmin) { Show-Warning "Instalacao requer Administrador. Reabra a ferramenta como Admin."; return }
         $selecionados = @($global:ExtraCheckboxes | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag })
         if ($selecionados.Count -eq 0) { Show-Warning "Selecione ao menos um item."; return }
-        $results = @{}
-        foreach ($app in $selecionados) { $results[$app.Name] = Install-DirectApp -App $app }
+        $ov = Show-BusyOverlay -Text "Instalando pacote extra..."
+        $txtOv = if ($ov -ne $null) { $ov.FindName("TxtLoadingStatus") } else { $null }
+        try {
+            $results = @{}
+            $i = 0
+            foreach ($app in $selecionados) {
+                $i++
+                if ($txtOv -ne $null) { $txtOv.Text = "Instalando {0}/{1}: {2}..." -f $i,$selecionados.Count,$app.Name; $ov.Dispatcher.Invoke([System.Action]{}, [System.Windows.Threading.DispatcherPriority]::Render) }
+                $results[$app.Name] = Install-DirectApp -App $app
+            }
+        } finally { Close-BusyOverlay -Overlay $ov }
         $path = Export-InstallReport -Results $results -Section "PacoteExtra"
         Show-Info ("Instalacao concluida. Relatorio salvo em:`n{0}" -f $path)
     }.GetNewClosure())
@@ -3454,12 +3539,7 @@ function Show-MainWindow {
         if (-not $Silencioso) {
             $btnEscanearRef = $window.FindName("BtnEscanear")
             $btnEscanearRef.IsEnabled = $false
-            $overlayReader = [System.Xml.XmlNodeReader]::new([xml]$global:LoadingOverlayXaml)
-            $overlay = [System.Windows.Markup.XamlReader]::Load($overlayReader)
-            $overlay.Owner = $global:MainWindow
-            Set-DialogTheme -Dialog $overlay
-            $overlay.Show()
-            $overlay.Dispatcher.Invoke([System.Action]{}, [System.Windows.Threading.DispatcherPriority]::Render)
+            $overlay = Show-BusyOverlay -Text "Escaneando impressoras..."
         }
         try {
             $resultado = Get-ImpressorasRede
@@ -3471,7 +3551,7 @@ function Show-MainWindow {
             Write-Log -Message ("[PRINT] Falha ao escanear: {0}" -f $_.Exception.Message) -Level "ERROR"
             if (-not $Silencioso) { Show-ErrorBox ("Falha ao escanear a rede de impressoras.`n`n{0}" -f $_.Exception.Message) }
         } finally {
-            if ($overlay -ne $null) { $overlay.Close() }
+            Close-BusyOverlay -Overlay $overlay
             if (-not $Silencioso) { $window.FindName("BtnEscanear").IsEnabled = $true }
         }
     }.GetNewClosure()
@@ -3505,9 +3585,21 @@ function Show-MainWindow {
         Show-Info "Limpeza concluida."
     }.GetNewClosure())
 
-    $window.FindName("BtnSfcScan").Add_Click({ Invoke-SfcScan }.GetNewClosure())
-    $window.FindName("BtnDismRestore").Add_Click({ Invoke-DismRestoreHealth }.GetNewClosure())
-    $window.FindName("BtnWingetUpgrade").Add_Click({ Update-WingetApps }.GetNewClosure())
+    $window.FindName("BtnSfcScan").Add_Click({
+        $btn = $window.FindName("BtnSfcScan"); $btn.IsEnabled = $false
+        $ov = Show-BusyOverlay -Text "Executando SFC /scannow - isso pode levar varios minutos..."
+        try { Invoke-SfcScan } finally { Close-BusyOverlay -Overlay $ov; $btn.IsEnabled = $true }
+    }.GetNewClosure())
+    $window.FindName("BtnDismRestore").Add_Click({
+        $btn = $window.FindName("BtnDismRestore"); $btn.IsEnabled = $false
+        $ov = Show-BusyOverlay -Text "Executando DISM RestoreHealth - isso pode levar varios minutos..."
+        try { Invoke-DismRestoreHealth } finally { Close-BusyOverlay -Overlay $ov; $btn.IsEnabled = $true }
+    }.GetNewClosure())
+    $window.FindName("BtnWingetUpgrade").Add_Click({
+        $btn = $window.FindName("BtnWingetUpgrade"); $btn.IsEnabled = $false
+        $ov = Show-BusyOverlay -Text "Atualizando aplicativos via winget..."
+        try { Update-WingetApps } finally { Close-BusyOverlay -Overlay $ov; $btn.IsEnabled = $true }
+    }.GetNewClosure())
     $window.FindName("BtnUninstaller").Add_Click({
         if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
         Show-UninstallerDialog
