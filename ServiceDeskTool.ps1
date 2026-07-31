@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.3"
+$global:AppVersion    = "3.4"
 $global:SchemaVersion = 1
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
@@ -1281,6 +1281,22 @@ function Invoke-CleanupOperation {
     }
 }
 
+function Clear-AllUsersTempFolders {
+    if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
+    $usersRoot = Join-Path $env:SystemDrive "Users"
+    if (-not (Test-Path $usersRoot)) { return }
+    $skip = @("Public","Default","Default User","All Users")
+    foreach ($userDir in Get-ChildItem -Path $usersRoot -Directory -Force -ErrorAction SilentlyContinue) {
+        if ($skip -contains $userDir.Name) { continue }
+        $tempPath = Join-Path $userDir.FullName "AppData\Local\Temp"
+        if (Test-Path $tempPath) {
+            Set-Status ("Limpando temporarios em {0}..." -f $tempPath)
+            Get-ChildItem -Path $tempPath -Force -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
+        }
+    }
+    Write-Log -Message "[CLEANUP] Temporarios limpos para todos os perfis de usuario." -Level "SUCCESS"
+}
+
 function Clear-WindowsUpdateCache {
     if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
     foreach ($svc in @("wuauserv","bits")) { try{Stop-Service -Name $svc -Force -EA SilentlyContinue}catch{} }
@@ -2251,7 +2267,19 @@ $script:XamlHead = @'
                                 <TextBlock Grid.Column="1" Text="Instalar Aplicativos" Style="{StaticResource SidebarNavLabel}"/>
                             </Grid>
                         </Button>
-                        <TextBlock Text="IMPRESSAO" Style="{StaticResource NavGroupLabel}"/>
+                        <TextBlock Text="REDE" Style="{StaticResource NavGroupLabel}"/>
+                        <Button x:Name="NavRede" Style="{StaticResource SidebarButton}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource SidebarNavIcon}" Background="#0EA5E9">
+                                    <TextBlock Text="RD" Style="{StaticResource SidebarNavIconText}"/>
+                                </Border>
+                                <TextBlock Grid.Column="1" Text="Rede" Style="{StaticResource SidebarNavLabel}"/>
+                            </Grid>
+                        </Button>
                         <Button x:Name="NavImpressao" Style="{StaticResource SidebarButton}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -2265,6 +2293,30 @@ $script:XamlHead = @'
                             </Grid>
                         </Button>
                         <TextBlock Text="SISTEMA" Style="{StaticResource NavGroupLabel}"/>
+                        <Button x:Name="NavDiagnostico" Style="{StaticResource SidebarButton}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource SidebarNavIcon}" Background="#2563EB">
+                                    <TextBlock Text="DG" Style="{StaticResource SidebarNavIconText}"/>
+                                </Border>
+                                <TextBlock Grid.Column="1" Text="Diagnostico" Style="{StaticResource SidebarNavLabel}"/>
+                            </Grid>
+                        </Button>
+                        <Button x:Name="NavLimpeza" Style="{StaticResource SidebarButton}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource SidebarNavIcon}" Background="#14B8A6">
+                                    <TextBlock Text="LO" Style="{StaticResource SidebarNavIconText}"/>
+                                </Border>
+                                <TextBlock Grid.Column="1" Text="Limpeza e Otimizacao" Style="{StaticResource SidebarNavLabel}"/>
+                            </Grid>
+                        </Button>
                         <Button x:Name="NavFerramentas" Style="{StaticResource SidebarButton}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -2836,6 +2888,381 @@ function Invoke-DismComponentCleanup {
     Show-ProcessResultInfo -Result $r -Titulo "WinSxS / DISM Cleanup"
 }
 
+# ---- LIMPEZA AVANCADA ----
+
+# Usa a Limpeza de Disco nativa (cleanmgr /sagerun) em vez de apagar a pasta
+# na mao - varios arquivos dentro de Windows.old pertencem ao
+# TrustedInstaller e um "rd /s" direto costuma falhar com Acesso Negado. O
+# StateFlags marcado no registro diz ao cleanmgr quais categorias incluir
+# nessa execucao "sageset" especifica (65432 e so um numero arbitrario
+# nao usado por outra coisa).
+function Clear-WindowsOldFolder {
+    if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
+    $p = Join-Path $env:SystemDrive "Windows.old"
+    if (-not (Test-Path $p)) { Show-Info "Nao ha pasta Windows.old neste computador."; return }
+    if (-not (Confirm-Action "Isso vai remover permanentemente C:\Windows.old (arquivos da instalacao anterior do Windows) usando a Limpeza de Disco do Windows.`n`nDepois disso NAO e mais possivel voltar para a versao anterior do Windows.`n`nDeseja continuar?" "Remover Windows.old")) { return }
+    $sageId = 65432
+    $base = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches"
+    $categorias = @("Previous Installations","Windows ESD installation files","Windows Upgrade Log Files","Temporary Windows Installation Files")
+    foreach ($cat in $categorias) {
+        $kp = Join-Path $base $cat
+        if (Test-Path $kp) { try { Set-ItemProperty -Path $kp -Name ("StateFlags{0:D4}" -f $sageId) -Value 2 -Type DWord -ErrorAction Stop } catch {} }
+    }
+    $r = Invoke-VisibleConsoleCommand ("cleanmgr /sagerun:{0}" -f $sageId) "[CLEANUP] cleanmgr Windows.old" 900 "Removendo Windows.old via Limpeza de Disco - isso pode levar varios minutos..."
+    Show-ProcessResultInfo -Result $r -Titulo "Remover Windows.old"
+}
+
+# So mostra a lista (nao apaga nada) - identificar com seguranca qual
+# versao de um driver esta REALMENTE em uso, de forma independente do
+# idioma do Windows (os rotulos do "pnputil /enum-drivers" sao localizados,
+# entao fazer parsing automatico do texto e arriscado: um parsing errado
+# poderia remover o driver ativo de uma peca de hardware). Fica pro tecnico
+# decidir manualmente com "pnputil /delete-driver oemXX.inf /uninstall".
+function Get-DriverStoreInfo {
+    $ov = Show-BusyOverlay -Text "Listando drivers no DriverStore..."
+    try { $r = Invoke-ConsoleCommand "pnputil /enum-drivers" "[CLEANUP] pnputil enum-drivers" 60 } finally { Close-BusyOverlay -Overlay $ov }
+    return $r.Output
+}
+
+# ---- ANALISE DE DISCO ----
+function Get-FolderSizeMB {
+    param([string]$Path)
+    try {
+        $bytes = (Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue |
+            Where-Object { -not $_.PSIsContainer } |
+            Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
+        if ($null -eq $bytes) { return 0 }
+        return [math]::Round($bytes / 1MB, 1)
+    } catch { return 0 }
+}
+
+function Get-DiskUsageReport {
+    param([string]$RootPath)
+    if (-not (Test-Path $RootPath)) { return ("Caminho nao encontrado: {0}" -f $RootPath) }
+    $pastas = @(Get-ChildItem -LiteralPath $RootPath -Directory -Force -ErrorAction SilentlyContinue)
+    if ($pastas.Count -eq 0) { return ("Nenhuma pasta encontrada em {0}." -f $RootPath) }
+    $ov = Show-BusyOverlay -Text ("Analisando espaco em disco em {0}..." -f $RootPath)
+    $txtOv = if ($ov -ne $null) { $ov.FindName("TxtLoadingStatus") } else { $null }
+    try {
+        $itens = New-Object System.Collections.ArrayList
+        $i = 0
+        foreach ($pasta in $pastas) {
+            $i++
+            # Atualiza o texto ANTES de cada pasta (algumas pastas, tipo
+            # AppData, podem levar bastante tempo sozinhas - sem isso o
+            # overlay ficaria parado no mesmo texto por minutos, exatamente
+            # o "parece travado" que se quer evitar aqui).
+            if ($txtOv -ne $null) {
+                $txtOv.Text = "Analisando {0}/{1}: {2}..." -f $i,$pastas.Count,$pasta.Name
+                $ov.Dispatcher.Invoke([System.Action]{}, [System.Windows.Threading.DispatcherPriority]::Render)
+            }
+            [void]$itens.Add([PSCustomObject]@{ Nome = $pasta.Name; TamanhoMB = (Get-FolderSizeMB -Path $pasta.FullName) })
+        }
+        $ordenado = @($itens | Sort-Object TamanhoMB -Descending | Select-Object -First 20)
+        $linhas = foreach ($it in $ordenado) { "{0,10:N1} MB   {1}" -f $it.TamanhoMB,$it.Nome }
+        return ($linhas -join "`r`n")
+    } finally { Close-BusyOverlay -Overlay $ov }
+}
+
+# ---- OTIMIZACAO ----
+
+# Reset "classico" de Windows Update: para os servicos, RENOMEIA (nao
+# apaga) as pastas de cache - assim fica reversivel e o Windows recria
+# pastas novas sozinho na proxima verificacao de updates.
+function Invoke-WindowsUpdateReset {
+    if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
+    if (-not (Confirm-Action "Isso vai parar os servicos do Windows Update, renomear as pastas de cache (SoftwareDistribution e catroot2) e reiniciar os servicos - conserto comum para Windows Update travado ou com erro. As pastas antigas nao sao apagadas, so renomeadas.`n`nDeseja continuar?" "Resetar Windows Update")) { return }
+    $ov = Show-BusyOverlay -Text "Resetando componentes do Windows Update..."
+    try {
+        $servicos = @("wuauserv","bits","cryptsvc","msiserver")
+        foreach ($svc in $servicos) { try { Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue } catch {} }
+        Start-Sleep -Seconds 2
+        $stamp = Get-Date -Format "yyyyMMddHHmmss"
+        foreach ($p in @((Join-Path $env:WINDIR "SoftwareDistribution"),(Join-Path $env:WINDIR "System32\catroot2"))) {
+            if (Test-Path $p) { try { Rename-Item -Path $p -NewName ("{0}.old.{1}" -f (Split-Path $p -Leaf),$stamp) -ErrorAction SilentlyContinue } catch {} }
+        }
+        foreach ($svc in $servicos) { try { Start-Service -Name $svc -ErrorAction SilentlyContinue } catch {} }
+        Write-Log -Message "[REPAIR] Componentes do Windows Update resetados." -Level "SUCCESS"
+    } finally { Close-BusyOverlay -Overlay $ov }
+    Show-Info "Componentes do Windows Update resetados. As pastas antigas foram renomeadas (nao apagadas) e o Windows recria pastas novas na proxima verificacao de atualizacoes."
+}
+
+function Invoke-SearchIndexRebuild {
+    if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
+    if (-not (Confirm-Action "Isso vai parar o servico de busca do Windows e apagar o indice atual, deixando ele se reconstruir do zero. A busca pode ficar mais lenta/incompleta ate terminar de reindexar em segundo plano (pode levar um tempo).`n`nDeseja continuar?" "Reconstruir Indice de Busca")) { return }
+    $ov = Show-BusyOverlay -Text "Reconstruindo indice de busca..."
+    try {
+        try { Stop-Service -Name "WSearch" -Force -ErrorAction Stop } catch {
+            Close-BusyOverlay -Overlay $ov
+            Show-Warning "Nao foi possivel parar o servico de busca (WSearch)."
+            return
+        }
+        Start-Sleep -Seconds 2
+        $dataPath = Join-Path $env:ProgramData "Microsoft\Search\Data\Applications\Windows"
+        if (Test-Path $dataPath) { Get-ChildItem -Path $dataPath -Force -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue }
+        try { Start-Service -Name "WSearch" -ErrorAction SilentlyContinue } catch {}
+        Write-Log -Message "[REPAIR] Indice de busca apagado - Windows vai reconstruir em segundo plano." -Level "SUCCESS"
+    } finally { Close-BusyOverlay -Overlay $ov }
+    Show-Info "Indice de busca apagado. O Windows Search vai reconstrui-lo automaticamente em segundo plano."
+}
+
+function Invoke-DiskOptimize {
+    param([string]$Drive = "C")
+    if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
+    Set-Status ("Otimizando disco {0}: - isso pode levar varios minutos..." -f $Drive)
+    # "defrag /O" detecta o tipo de midia sozinho: faz TRIM em SSD e
+    # desfragmentacao tradicional em HD, sem precisar perguntar qual e.
+    $r = Invoke-VisibleConsoleCommand ("defrag {0}: /O" -f $Drive) ("[REPAIR] defrag {0}: /O" -f $Drive) 1800 ("Otimizando disco {0}: - isso pode levar varios minutos..." -f $Drive)
+    Show-ProcessResultInfo -Result $r -Titulo ("Otimizar Disco {0}:" -f $Drive)
+}
+
+function Invoke-BatteryReport {
+    $outPath = Join-Path $env:TEMP ("BatteryReport_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".html")
+    $ov = Show-BusyOverlay -Text "Gerando relatorio de bateria..."
+    try { $r = Invoke-ConsoleCommand ("powercfg /batteryreport /output "+([char]34)+$outPath+([char]34)) "[REPAIR] powercfg batteryreport" 30 } finally { Close-BusyOverlay -Overlay $ov }
+    if (Test-Path $outPath) {
+        try { Start-Process $outPath } catch {}
+        Show-Info ("Relatorio de bateria gerado e aberto no navegador.`n`nArquivo: {0}" -f $outPath)
+    } else {
+        Show-Warning "Nao foi possivel gerar o relatorio de bateria (a maquina pode nao ter bateria, ex.: desktop)."
+    }
+}
+
+# ---- GERENCIADOR DE ITENS DE INICIALIZACAO ----
+# "Desativar" NUNCA apaga nada - move o valor de registro pra uma chave de
+# backup propria (HKCU:\Software\ElginServiceDesk\DisabledStartup) ou o
+# atalho pra uma subpasta "_DesativadoElgin" dentro da propria pasta
+# Inicializar (o Windows so roda atalhos direto na pasta, nao em
+# subpastas - isso ja desativa sem precisar apagar o arquivo). "Reativar"
+# desfaz exatamente isso.
+$global:StartupBackupKey = "HKCU:\Software\ElginServiceDesk\DisabledStartup"
+$global:StartupRegSources = @(
+    @{ Path="HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"; Tag="HKLM_Run" }
+    @{ Path="HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run"; Tag="HKLM_Run32" }
+    @{ Path="HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"; Tag="HKCU_Run" }
+)
+
+function Get-StartupRegSourcePath {
+    param([string]$Tag)
+    $found = $global:StartupRegSources | Where-Object { $_.Tag -eq $Tag }
+    if ($found) { return $found.Path }
+    return $null
+}
+
+function Get-StartupItems {
+    $itens = New-Object System.Collections.ArrayList
+    foreach ($src in $global:StartupRegSources) {
+        if (Test-Path $src.Path) {
+            $props = Get-ItemProperty -Path $src.Path -ErrorAction SilentlyContinue
+            if ($props) {
+                foreach ($prop in $props.PSObject.Properties) {
+                    if ($prop.Name -match '^PS(Path|ParentPath|ChildName|Provider)$') { continue }
+                    [void]$itens.Add([PSCustomObject]@{
+                        Nome=[string]$prop.Name; Comando=[string]$prop.Value; Origem=$src.Tag; Tipo="Registro"; CaminhoArquivo=$null
+                    })
+                }
+            }
+        }
+    }
+    foreach ($folderInfo in @(
+        @{ Path=[Environment]::GetFolderPath('Startup'); Tag="Startup_User" }
+        @{ Path=[Environment]::GetFolderPath('CommonStartup'); Tag="Startup_AllUsers" }
+    )) {
+        if (Test-Path $folderInfo.Path) {
+            Get-ChildItem -Path $folderInfo.Path -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                [void]$itens.Add([PSCustomObject]@{
+                    Nome=$_.BaseName; Comando=$_.FullName; Origem=$folderInfo.Tag; Tipo="Pasta Inicializar"; CaminhoArquivo=$_.FullName
+                })
+            }
+        }
+    }
+    return @($itens | Sort-Object Nome)
+}
+
+function Get-DisabledStartupItems {
+    $itens = New-Object System.Collections.ArrayList
+    if (Test-Path $global:StartupBackupKey) {
+        $props = Get-ItemProperty -Path $global:StartupBackupKey -ErrorAction SilentlyContinue
+        if ($props) {
+            foreach ($prop in $props.PSObject.Properties) {
+                if ($prop.Name -match '^PS(Path|ParentPath|ChildName|Provider)$') { continue }
+                $parts = $prop.Name -split '\|',2
+                if ($parts.Count -eq 2) {
+                    [void]$itens.Add([PSCustomObject]@{ Origem=$parts[0]; Nome=$parts[1]; Comando=[string]$prop.Value; Tipo="Registro"; CaminhoArquivo=$null })
+                }
+            }
+        }
+    }
+    foreach ($folderInfo in @(
+        @{ Path=(Join-Path ([Environment]::GetFolderPath('Startup')) "_DesativadoElgin"); Tag="Startup_User" }
+        @{ Path=(Join-Path ([Environment]::GetFolderPath('CommonStartup')) "_DesativadoElgin"); Tag="Startup_AllUsers" }
+    )) {
+        if (Test-Path $folderInfo.Path) {
+            Get-ChildItem -Path $folderInfo.Path -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                [void]$itens.Add([PSCustomObject]@{ Origem=$folderInfo.Tag; Nome=$_.BaseName; Comando=$_.FullName; Tipo="Pasta Inicializar"; CaminhoArquivo=$_.FullName })
+            }
+        }
+    }
+    return @($itens | Sort-Object Nome)
+}
+
+function Disable-StartupItem {
+    param([Parameter(Mandatory=$true)]$Item)
+    if (($Item.Origem -eq "HKLM_Run" -or $Item.Origem -eq "HKLM_Run32" -or $Item.Origem -eq "Startup_AllUsers") -and -not $global:IsAdmin) {
+        Show-Warning "Este item vale para todos os usuarios da maquina - requer Administrador para desativar."
+        return $false
+    }
+    try {
+        if ($Item.Tipo -eq "Registro") {
+            if (-not (Test-Path $global:StartupBackupKey)) { New-Item -Path $global:StartupBackupKey -Force | Out-Null }
+            $backupName = "{0}|{1}" -f $Item.Origem,$Item.Nome
+            Set-ItemProperty -Path $global:StartupBackupKey -Name $backupName -Value $Item.Comando -Type String -Force
+            $livePath = Get-StartupRegSourcePath -Tag $Item.Origem
+            if ($livePath) { Remove-ItemProperty -Path $livePath -Name $Item.Nome -ErrorAction SilentlyContinue }
+        } else {
+            $parentFolder = Split-Path $Item.CaminhoArquivo -Parent
+            $disabledFolder = Join-Path $parentFolder "_DesativadoElgin"
+            if (-not (Test-Path $disabledFolder)) { New-Item -Path $disabledFolder -ItemType Directory -Force | Out-Null }
+            Move-Item -Path $Item.CaminhoArquivo -Destination $disabledFolder -Force
+        }
+        Write-Log -Message ("[STARTUP] Desativado: {0} ({1})" -f $Item.Nome,$Item.Origem) -Level "SUCCESS"
+        return $true
+    } catch {
+        Write-Log -Message ("[STARTUP] Falha ao desativar {0}: {1}" -f $Item.Nome,$_.Exception.Message) -Level "ERROR"
+        return $false
+    }
+}
+
+function Enable-StartupItem {
+    param([Parameter(Mandatory=$true)]$Item)
+    if (($Item.Origem -eq "HKLM_Run" -or $Item.Origem -eq "HKLM_Run32" -or $Item.Origem -eq "Startup_AllUsers") -and -not $global:IsAdmin) {
+        Show-Warning "Este item vale para todos os usuarios da maquina - requer Administrador para reativar."
+        return $false
+    }
+    try {
+        if ($Item.Tipo -eq "Registro") {
+            $livePath = Get-StartupRegSourcePath -Tag $Item.Origem
+            if (-not $livePath) { return $false }
+            if (-not (Test-Path $livePath)) { New-Item -Path $livePath -Force | Out-Null }
+            Set-ItemProperty -Path $livePath -Name $Item.Nome -Value $Item.Comando -Type String -Force
+            $backupName = "{0}|{1}" -f $Item.Origem,$Item.Nome
+            if (Test-Path $global:StartupBackupKey) { Remove-ItemProperty -Path $global:StartupBackupKey -Name $backupName -ErrorAction SilentlyContinue }
+        } else {
+            $disabledFolder = Split-Path $Item.CaminhoArquivo -Parent
+            $parentFolder = Split-Path $disabledFolder -Parent
+            Move-Item -Path $Item.CaminhoArquivo -Destination $parentFolder -Force
+        }
+        Write-Log -Message ("[STARTUP] Reativado: {0} ({1})" -f $Item.Nome,$Item.Origem) -Level "SUCCESS"
+        return $true
+    } catch {
+        Write-Log -Message ("[STARTUP] Falha ao reativar {0}: {1}" -f $Item.Nome,$_.Exception.Message) -Level "ERROR"
+        return $false
+    }
+}
+
+$script:StartupManagerDialogXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Itens de Inicializacao" Height="600" Width="740"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
+        Background="{DynamicResource BrushWindowBg}">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="Itens de Inicializacao" Foreground="{DynamicResource BrushText}" FontSize="18" FontWeight="Bold" Margin="0,0,0,4"/>
+        <TextBlock Grid.Row="1" Text="Programas que iniciam junto com o Windows. Desativar move o item pra um local de backup - nada e apagado, e pode ser reativado depois." Foreground="{DynamicResource BrushTextMuted}" FontSize="11.5" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+        <DataGrid Grid.Row="2" x:Name="DgStartupAtivos" AutoGenerateColumns="False" IsReadOnly="True"
+                  Background="{DynamicResource BrushSurface}" Foreground="{DynamicResource BrushText}" BorderThickness="1" BorderBrush="{DynamicResource BrushBorder}"
+                  HeadersVisibility="Column" RowBackground="{DynamicResource BrushSurface}" AlternatingRowBackground="{DynamicResource BrushSurfaceAlt}"
+                  GridLinesVisibility="None" RowHeight="36" Margin="0,0,0,4">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="ATIVOS" Binding="{Binding Nome}" Width="1.6*"/>
+                <DataGridTextColumn Header="ORIGEM" Binding="{Binding Origem}" Width="1*"/>
+                <DataGridTextColumn Header="COMANDO / CAMINHO" Binding="{Binding Comando}" Width="2.6*"/>
+                <DataGridTemplateColumn Header="ACAO" Width="100">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Button Content="Desativar" Width="86" Height="26" FontSize="10.5"
+                                    Background="{DynamicResource BrushWarning}" Foreground="White" BorderThickness="0" Cursor="Hand"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <TextBlock Grid.Row="3" Text="DESATIVADOS" Foreground="{DynamicResource BrushTextFaint}" FontSize="11" FontWeight="Bold" Margin="0,8,0,4"/>
+
+        <DataGrid Grid.Row="4" x:Name="DgStartupDesativados" AutoGenerateColumns="False" IsReadOnly="True"
+                  Background="{DynamicResource BrushSurface}" Foreground="{DynamicResource BrushText}" BorderThickness="1" BorderBrush="{DynamicResource BrushBorder}"
+                  HeadersVisibility="Column" RowBackground="{DynamicResource BrushSurface}" AlternatingRowBackground="{DynamicResource BrushSurfaceAlt}"
+                  GridLinesVisibility="None" RowHeight="36">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="DESATIVADOS" Binding="{Binding Nome}" Width="1.6*"/>
+                <DataGridTextColumn Header="ORIGEM" Binding="{Binding Origem}" Width="1*"/>
+                <DataGridTextColumn Header="COMANDO / CAMINHO" Binding="{Binding Comando}" Width="2.6*"/>
+                <DataGridTemplateColumn Header="ACAO" Width="100">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Button Content="Reativar" Width="86" Height="26" FontSize="10.5"
+                                    Background="{DynamicResource BrushSuccess}" Foreground="White" BorderThickness="0" Cursor="Hand"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <Button Grid.Row="5" x:Name="BtnFecharStartup" Content="Fechar" Width="100" Height="34" HorizontalAlignment="Right" Margin="0,14,0,0"
+                Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" BorderThickness="0"/>
+    </Grid>
+</Window>
+'@
+
+function Show-StartupManagerDialog {
+    $reader = [System.Xml.XmlNodeReader]::new([xml]$script:StartupManagerDialogXaml)
+    $dlg = [System.Windows.Markup.XamlReader]::Load($reader)
+    $dlg.Owner = $global:MainWindow
+    Set-DialogTheme -Dialog $dlg
+
+    $dgAtivos = $dlg.FindName("DgStartupAtivos")
+    $dgDesativados = $dlg.FindName("DgStartupDesativados")
+
+    $RefreshStartupLists = {
+        $dgAtivos.ItemsSource = @(Get-StartupItems)
+        $dgDesativados.ItemsSource = @(Get-DisabledStartupItems)
+    }.GetNewClosure()
+    & $RefreshStartupLists
+
+    $dgAtivos.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windows.RoutedEventHandler]{
+        param($senderObj,$e)
+        $btn = $e.OriginalSource
+        if ($btn -isnot [System.Windows.Controls.Button]) { return }
+        $item = $btn.DataContext
+        if ($null -eq $item) { return }
+        if (-not (Confirm-Action ("Desativar '{0}'?`n`nO item e movido para backup (nao apagado) e pode ser reativado depois." -f $item.Nome) "Desativar item de inicializacao")) { return }
+        if (Disable-StartupItem -Item $item) { & $RefreshStartupLists } else { Show-ErrorBox "Nao foi possivel desativar este item." }
+    }.GetNewClosure())
+
+    $dgDesativados.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windows.RoutedEventHandler]{
+        param($senderObj,$e)
+        $btn = $e.OriginalSource
+        if ($btn -isnot [System.Windows.Controls.Button]) { return }
+        $item = $btn.DataContext
+        if ($null -eq $item) { return }
+        if (Enable-StartupItem -Item $item) { & $RefreshStartupLists } else { Show-ErrorBox "Nao foi possivel reativar este item." }
+    }.GetNewClosure())
+
+    $dlg.FindName("BtnFecharStartup").Add_Click({ $dlg.Close() }.GetNewClosure())
+    [void]$dlg.ShowDialog()
+}
+
 # ---- REDE AVANCADA ----
 function Get-WifiProfilesInfo {
     $ov = Show-BusyOverlay -Text "Consultando perfis de Wi-Fi..."
@@ -3042,19 +3469,370 @@ function Show-MapNetworkDriveDialog {
     [void]$dlg.ShowDialog()
 }
 
+# ==============================================================================
+# DIALOGO DE ATENCAO (customizado, com triangulo de aviso) - usado antes de
+# acoes que merecem uma checagem manual extra antes de continuar (ex.:
+# ativacao por script).
+# ==============================================================================
+$script:AttentionDialogXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Atencao" Height="270" Width="460"
+        WindowStartupLocation="CenterOwner" WindowStyle="None" ResizeMode="NoResize"
+        Background="{DynamicResource BrushSurface}">
+    <Border BorderBrush="{DynamicResource BrushBorder}" BorderThickness="1" CornerRadius="10">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="4"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <Border Grid.Row="0" Background="{DynamicResource BrushWarning}"/>
+            <TextBlock Grid.Row="1" x:Name="TxtAttentionTitle" Text="Atencao" Foreground="{DynamicResource BrushText}" FontSize="16" FontWeight="Bold" Margin="20,16,20,0"/>
+            <Grid Grid.Row="2" Margin="20,14,20,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid Grid.Column="0" Width="40" Height="40" VerticalAlignment="Top" Margin="0,0,14,0">
+                    <Polygon Points="20,2 38,36 2,36" Fill="{DynamicResource BrushWarning}"/>
+                    <TextBlock Text="!" FontSize="20" FontWeight="Bold" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,3"/>
+                </Grid>
+                <TextBlock Grid.Column="1" x:Name="TxtAttentionMessage" Text="" Foreground="{DynamicResource BrushTextMuted}" FontSize="13" TextWrapping="Wrap" VerticalAlignment="Top"/>
+            </Grid>
+            <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="20,0,20,18">
+                <Button x:Name="BtnAttentionCancelar" Content="CANCELAR" Width="110" Height="36" Margin="0,0,10,0" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" BorderThickness="0" FontWeight="Bold" Cursor="Hand"/>
+                <Button x:Name="BtnAttentionContinuar" Content="CONTINUAR" Width="120" Height="36" Background="{DynamicResource BrushAccent}" Foreground="White" BorderThickness="0" FontWeight="Bold" Cursor="Hand"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>
+'@
+
+function Show-AttentionDialog {
+    param([string]$Title = "Atencao", [string]$Message = "")
+    $reader = [System.Xml.XmlNodeReader]::new([xml]$script:AttentionDialogXaml)
+    $dlg = [System.Windows.Markup.XamlReader]::Load($reader)
+    $dlg.Owner = $global:MainWindow
+    Set-DialogTheme -Dialog $dlg
+    $dlg.Title = $Title
+    $dlg.FindName("TxtAttentionTitle").Text = $Title
+    $dlg.FindName("TxtAttentionMessage").Text = $Message
+    $dlg.FindName("BtnAttentionContinuar").Add_Click({ $dlg.DialogResult = $true; $dlg.Close() }.GetNewClosure())
+    $dlg.FindName("BtnAttentionCancelar").Add_Click({ $dlg.DialogResult = $false; $dlg.Close() }.GetNewClosure())
+    return [bool]$dlg.ShowDialog()
+}
+
+# ==============================================================================
+# DIAGNOSTICO
+# ==============================================================================
+
+function Get-DiagnosticReportText {
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine(("Relatorio de Diagnostico - {0}" -f $global:AppName))
+    [void]$sb.AppendLine(("Gerado em: {0}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss")))
+    [void]$sb.AppendLine("============================================================")
+    [void]$sb.AppendLine(("Computador: {0}" -f $env:COMPUTERNAME))
+    [void]$sb.AppendLine(("Usuario: {0}" -f $env:USERNAME))
+    [void]$sb.AppendLine(("Administrador: {0}" -f $global:IsAdmin))
+    [void]$sb.AppendLine(("Winget: {0}" -f $global:HasWinget))
+    [void]$sb.AppendLine(("Chocolatey: {0}" -f $global:HasChoco))
+    [void]$sb.AppendLine(("Internet: {0}" -f $global:HasInternet))
+    [void]$sb.AppendLine("")
+
+    try {
+        $os   = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        $cs   = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+        $bios = Get-CimInstance Win32_BIOS -ErrorAction Stop
+        $uptime = (Get-Date) - $os.LastBootUpTime
+
+        [void]$sb.AppendLine(("Sistema Operacional: {0}" -f $os.Caption))
+        [void]$sb.AppendLine(("Versao: {0} | Build: {1} | Arquitetura: {2}" -f $os.Version,$os.BuildNumber,$os.OSArchitecture))
+        [void]$sb.AppendLine(("Ultimo boot: {0} | Uptime: {1:N1} horas" -f $os.LastBootUpTime.ToString("dd/MM/yyyy HH:mm:ss"),$uptime.TotalHours))
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine(("Fabricante: {0}" -f $cs.Manufacturer))
+        [void]$sb.AppendLine(("Modelo: {0}" -f $cs.Model))
+        $dominio = if ($cs.PartOfDomain) { $cs.Domain } else { $cs.Workgroup }
+        [void]$sb.AppendLine(("Dominio/Grupo: {0}" -f $dominio))
+        [void]$sb.AppendLine(("Memoria RAM: {0:N2} GB" -f ($cs.TotalPhysicalMemory / 1GB)))
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine(("Serial/Service Tag: {0}" -f $bios.SerialNumber))
+    } catch { [void]$sb.AppendLine(("Falha ao ler informacoes do sistema: {0}" -f $_.Exception.Message)) }
+
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("Discos:")
+    try {
+        Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" -ErrorAction Stop | ForEach-Object {
+            [void]$sb.AppendLine(("  {0} Total: {1:N2} GB | Livre: {2:N2} GB" -f $_.DeviceID,($_.Size/1GB),($_.FreeSpace/1GB)))
+        }
+    } catch { [void]$sb.AppendLine("  Falha ao ler discos.") }
+
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("Rede:")
+    try {
+        Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled=True" -ErrorAction Stop | ForEach-Object {
+            $ip  = @($_.IPAddress) -join ", "
+            $gw  = @($_.DefaultIPGateway) -join ", "
+            $dns = @($_.DNSServerSearchOrder) -join ", "
+            [void]$sb.AppendLine(("  {0}" -f $_.Description))
+            [void]$sb.AppendLine(("    IP: {0} | Gateway: {1}" -f $ip,$gw))
+            [void]$sb.AppendLine(("    MAC: {0} | DNS: {1}" -f $_.MACAddress,$dns))
+        }
+    } catch { [void]$sb.AppendLine("  Falha ao ler configuracao de rede.") }
+
+    return $sb.ToString()
+}
+
+function Save-DiagnosticReportTxt {
+    param([string]$Text)
+    $path = Join-Path $global:ReportsPath ("Diagnostico-{0}-{1}.txt" -f $env:COMPUTERNAME,(Get-Date -Format "yyyyMMdd-HHmmss"))
+    $Text | Out-File -FilePath $path -Encoding UTF8 -Force
+    return $path
+}
+
+function Save-DiagnosticReportHtml {
+    param([string]$Text)
+    $path = Join-Path $global:ReportsPath ("Diagnostico-{0}-{1}.html" -f $env:COMPUTERNAME,(Get-Date -Format "yyyyMMdd-HHmmss"))
+    $escaped = [System.Net.WebUtility]::HtmlEncode($Text)
+    $html = "<html><head><meta charset=" + ([char]34) + "utf-8" + ([char]34) + "><title>Relatorio de Diagnostico</title></head><body><pre style=" + ([char]34) + "font-family:Consolas,monospace;font-size:13px;" + ([char]34) + ">" + $escaped + "</pre></body></html>"
+    $html | Out-File -FilePath $path -Encoding UTF8 -Force
+    return $path
+}
+
+function Open-ReportsFolder {
+    try { Start-Process explorer.exe -ArgumentList $global:ReportsPath } catch { Show-Warning "Nao foi possivel abrir a pasta de relatorios." }
+}
+
+function Open-BatterySettings {
+    try { Start-Process "ms-settings:batterysaver" } catch { Show-Warning "Nao foi possivel abrir as configuracoes de bateria." }
+}
+
+# Mesma logica que o Windows/slmgr/ospp usam para reportar ativacao -
+# LicenseStatus 1 = licenciado. Office e detectado procurando ospp.vbs nas
+# pastas padrao de instalacao (o caminho muda conforme a versao/arquitetura
+# do Office instalado).
+function Get-ActivationStatusText {
+    $ov = Show-BusyOverlay -Text "Verificando ativacao..."
+    try {
+        $sb = New-Object System.Text.StringBuilder
+        [void]$sb.AppendLine("WINDOWS")
+        try {
+            $lic = Get-CimInstance -Query "SELECT LicenseStatus,Name FROM SoftwareLicensingProduct WHERE PartialProductKey IS NOT NULL AND ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f'" -ErrorAction Stop
+            if ($lic) {
+                foreach ($l in @($lic)) {
+                    $status = switch ([int]$l.LicenseStatus) {
+                        0 { "Nao licenciado" }
+                        1 { "Licenciado (ativado)" }
+                        2 { "Periodo inicial (grace)" }
+                        3 { "Modo indulgente (nao genuino)" }
+                        4 { "Nao autorizado (VL nao ativado)" }
+                        5 { "Notificacao (nao ativado)" }
+                        default { "Status desconhecido ({0})" -f $l.LicenseStatus }
+                    }
+                    [void]$sb.AppendLine(("  {0}: {1}" -f $l.Name,$status))
+                }
+            } else { [void]$sb.AppendLine("  Nao foi possivel ler o status de licenciamento.") }
+        } catch { [void]$sb.AppendLine(("  Falha ao consultar ativacao do Windows: {0}" -f $_.Exception.Message)) }
+
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("OFFICE")
+        try {
+            $osppCandidates = @(Get-ChildItem -Path "C:\Program Files\Microsoft Office*","C:\Program Files (x86)\Microsoft Office*" -Filter "ospp.vbs" -Recurse -ErrorAction SilentlyContinue)
+        } catch { $osppCandidates = @() }
+        if ($osppCandidates.Count -eq 0) {
+            [void]$sb.AppendLine("  Office nao encontrado (ospp.vbs nao localizado).")
+        } else {
+            $ospp = $osppCandidates[0].FullName
+            $r = Invoke-ConsoleCommand ("cscript //nologo "+([char]34)+$ospp+([char]34)+" /dstatus") "[DIAG] ospp.vbs /dstatus" 30
+            if ($r.Output) { [void]$sb.AppendLine($r.Output.Trim()) } else { [void]$sb.AppendLine("  Nao foi possivel ler o status do Office.") }
+        }
+        return $sb.ToString()
+    } finally { Close-BusyOverlay -Overlay $ov }
+}
+
+function Get-BootHistory {
+    try {
+        $eventos = Get-WinEvent -FilterHashtable @{LogName='System'; Id=6005} -MaxEvents 15 -ErrorAction Stop
+        return @($eventos | ForEach-Object {
+            [PSCustomObject]@{
+                DataHoraInicio = $_.TimeCreated.ToString("dd/MM/yyyy HH:mm:ss")
+                DiaDaSemana    = $_.TimeCreated.ToString("dddd")
+            }
+        })
+    } catch { return @() }
+}
+
+# Ativacao por script (Microsoft Activation Scripts, get.activated.win) -
+# abre uma janela de PowerShell PROPRIA e visivel (mesmo padrao ja usado em
+# Invoke-RemoveWindowsAI: escreve um .cmd temporario e da Start-Process nele,
+# sem esperar) porque o script e interativo (o tecnico escolhe opcoes no
+# menu dele) - nao faz sentido nem e seguro tentar capturar/automatizar essa
+# interacao por aqui.
+$global:ActivationScriptUrl = "https://get.activated.win"
+
+function Invoke-ActivationByScript {
+    if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
+    $msg = "Antes de ativar o Windows ou Office por script deve-se primeiro confirmar a versao conforme etiqueta do equipamento e, se nao ha uma chave de ativacao, confirmar com o lider ou coordenador."
+    if (-not (Show-AttentionDialog -Title "Ativacao por Script" -Message $msg)) { return }
+    Write-Log -Message "[ACTIVATION] Solicitada ativacao por script (get.activated.win)." -Level "WARN"
+    $cmdFile = $null
+    try {
+        $psExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+        if (-not (Test-Path $psExe)) { $psExe = "powershell.exe" }
+        $cmdFile = Join-Path $env:TEMP ("Elgin_Ativacao_" + [guid]::NewGuid().ToString("N") + ".cmd")
+        $quote     = [char]34
+        $psCommand = "irm " + $global:ActivationScriptUrl + " | iex"
+        $cmdBody   = "@echo off`r`n" + $quote + $psExe + $quote + " -NoProfile -NoExit -Command " + $quote + $psCommand + $quote + "`r`n"
+        Set-Content -Path $cmdFile -Value $cmdBody -Encoding ASCII -Force
+        Start-Process -FilePath $cmdFile -ErrorAction Stop
+        Write-Log -Message "[ACTIVATION] Janela de ativacao por script aberta." -Level "INFO"
+    } catch {
+        Write-Log -Message ("[ACTIVATION] Falha ao abrir ativacao por script: {0}" -f $_.Exception.Message) -Level "ERROR"
+        Show-ErrorBox ("Falha ao iniciar a ativacao por script.`n`n{0}" -f $_.Exception.Message)
+    }
+}
+
 $script:XamlPanelsD = @'
-                <!-- Ferramentas -->
-                <Grid x:Name="PanelFerramentas" Visibility="Collapsed">
+                <!-- Diagnostico -->
+                <Grid x:Name="PanelDiagnostico" Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,14">
+                        <Border Width="40" Height="40" CornerRadius="9" Background="#2563EB" Margin="0,0,12,0">
+                            <TextBlock Text="DG" FontSize="13" FontWeight="Bold" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <TextBlock Text="Diagnostico" Foreground="{DynamicResource BrushText}" FontSize="22" FontWeight="Bold" VerticalAlignment="Center"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,14">
+                        <Button x:Name="TabDiagGeral" Content="Geral" Height="34" Padding="16,0" Margin="0,0,6,0" Background="{DynamicResource BrushActiveNav}" Foreground="{DynamicResource BrushAccent}" FontWeight="Bold" BorderThickness="0" Cursor="Hand"/>
+                        <Button x:Name="TabDiagHardware" Content="Hardware &amp; Drivers" Height="34" Padding="16,0" Margin="0,0,6,0" Background="Transparent" Foreground="{DynamicResource BrushTextMuted}" BorderThickness="0" Cursor="Hand"/>
+                        <Button x:Name="TabDiagEventos" Content="Eventos" Height="34" Padding="16,0" Margin="0,0,6,0" Background="Transparent" Foreground="{DynamicResource BrushTextMuted}" BorderThickness="0" Cursor="Hand"/>
+                        <Button x:Name="TabDiagAtivacao" Content="Ativacao &amp; Boot" Height="34" Padding="16,0" Background="Transparent" Foreground="{DynamicResource BrushTextMuted}" BorderThickness="0" Cursor="Hand"/>
+                    </StackPanel>
+
+                    <Grid Grid.Row="2">
+                        <!-- GERAL -->
+                        <Grid x:Name="SubDiagGeral" Visibility="Visible">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Border Grid.Row="0" Background="{DynamicResource BrushSurfaceAlt}" BorderBrush="{DynamicResource BrushBorder}" BorderThickness="1" CornerRadius="8" Margin="0,0,0,12">
+                                <TextBox x:Name="TxtDiagReport" Background="Transparent" Foreground="{DynamicResource BrushText}" FontFamily="Consolas" FontSize="12" Padding="12"
+                                         BorderThickness="0" IsReadOnly="True" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+                            </Border>
+                            <UniformGrid Grid.Row="1" Columns="5" Margin="0,0,0,8">
+                                <Button x:Name="BtnDiagMostrarInfo" Content="Mostrar Info" Height="36" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
+                                <Button x:Name="BtnDiagSalvarTxt" Content="Salvar TXT" Height="36" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushSuccess}"/>
+                                <Button x:Name="BtnDiagSalvarHtml" Content="Salvar HTML" Height="36" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushSuccess}"/>
+                                <Button x:Name="BtnDiagCopiar" Content="Copiar" Height="36" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                <Button x:Name="BtnDiagVerRelatorios" Content="Ver Relatorios" Height="36" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                            </UniformGrid>
+                            <UniformGrid Grid.Row="2" Columns="2">
+                                <Button x:Name="BtnDiagRelatorioBateria" Content="Relatorio Bateria" Height="36" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushWarning}"/>
+                                <Button x:Name="BtnDiagAbrirBateria" Content="Abrir Bateria" Height="36" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                            </UniformGrid>
+                        </Grid>
+
+                        <!-- HARDWARE E DRIVERS -->
+                        <Grid x:Name="SubDiagHardware" Visibility="Collapsed">
+                            <TextBlock Text="Ainda sem conteudo definido para esta aba - aguardando referencia visual (print) pra portar certo." Foreground="{DynamicResource BrushTextMuted}" FontSize="13" TextWrapping="Wrap" VerticalAlignment="Top" HorizontalAlignment="Left"/>
+                        </Grid>
+
+                        <!-- EVENTOS -->
+                        <Grid x:Name="SubDiagEventos" Visibility="Collapsed">
+                            <TextBlock Text="Ainda sem conteudo definido para esta aba - aguardando referencia visual (print) pra portar certo." Foreground="{DynamicResource BrushTextMuted}" FontSize="13" TextWrapping="Wrap" VerticalAlignment="Top" HorizontalAlignment="Left"/>
+                        </Grid>
+
+                        <!-- ATIVACAO E BOOT -->
+                        <Grid x:Name="SubDiagAtivacao" Visibility="Collapsed">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="1.1*"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="1.4*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Text="ATIVACAO WINDOWS E OFFICE" Foreground="{DynamicResource BrushAccent}" FontSize="12" FontWeight="Bold" Margin="0,0,0,8"/>
+                            <Border Grid.Row="1" Background="{DynamicResource BrushSurfaceAlt}" BorderBrush="{DynamicResource BrushBorder}" BorderThickness="1" CornerRadius="8" Margin="0,0,0,14">
+                                <TextBox x:Name="TxtDiagAtivacao" Background="Transparent" Foreground="{DynamicResource BrushText}" FontFamily="Consolas" FontSize="12" Padding="12"
+                                         BorderThickness="0" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
+                            </Border>
+                            <TextBlock Grid.Row="2" Text="HISTORICO DE BOOT (ultimos inicios do Windows)" Foreground="{DynamicResource BrushAccent}" FontSize="12" FontWeight="Bold" Margin="0,0,0,8"/>
+                            <Border Grid.Row="3" Background="{DynamicResource BrushSurfaceAlt}" BorderBrush="{DynamicResource BrushBorder}" BorderThickness="1" CornerRadius="8" Margin="0,0,0,14">
+                                <DataGrid x:Name="DgDiagBootHistory" AutoGenerateColumns="False" IsReadOnly="True" Background="Transparent" Foreground="{DynamicResource BrushText}" BorderThickness="0"
+                                          HeadersVisibility="Column" RowBackground="{DynamicResource BrushSurfaceAlt}" AlternatingRowBackground="{DynamicResource BrushSurface}"
+                                          GridLinesVisibility="None" RowHeight="32">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="DATA/HORA INICIO" Binding="{Binding DataHoraInicio}" Width="1*"/>
+                                        <DataGridTextColumn Header="DIA DA SEMANA" Binding="{Binding DiaDaSemana}" Width="1*"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Border>
+                            <UniformGrid Grid.Row="4" Columns="3">
+                                <Button x:Name="BtnDiagVerificarAtivacao" Content="Verificar Ativacao" Height="38" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
+                                <Button x:Name="BtnDiagHistoricoBoot" Content="Historico de Boot" Height="38" Margin="6,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                <Button x:Name="BtnDiagAtivarScript" Content="Ativar por Script" Height="38" Margin="6,0,0,0" Style="{StaticResource CardButton}" Background="#7C3AED"/>
+                            </UniformGrid>
+                        </Grid>
+                    </Grid>
+                </Grid>
+
+                <!-- Rede -->
+                <Grid x:Name="PanelRede" Visibility="Collapsed">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0" Text="Ferramentas" Foreground="{DynamicResource BrushText}" FontSize="22" FontWeight="Bold" Margin="0,0,0,4"/>
-                    <TextBlock Grid.Row="1" Text="Limpeza, reparos, rede, impressao e configuracoes da ferramenta." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,14"/>
+                    <TextBlock Grid.Row="0" Text="Rede" Foreground="{DynamicResource BrushText}" FontSize="22" FontWeight="Bold" Margin="0,0,0,4"/>
+                    <TextBlock Grid.Row="1" Text="Diagnostico de rede, Wi-Fi, conexoes/portas e unidades mapeadas." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,14"/>
+                    <ScrollViewer Grid.Row="2">
+                        <StackPanel>
+                            <!-- REDE -->
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="REDE" Foreground="{DynamicResource BrushAccent}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <UniformGrid Columns="3">
+                                        <Button x:Name="BtnFerrFlushDns" Content="Flush DNS" Height="36" Margin="0,0,6,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" ToolTip="Limpa o cache de resolucao DNS local."/>
+                                        <Button x:Name="BtnFerrRenewIp" Content="Renew IP" Height="36" Margin="0,0,6,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" ToolTip="Libera e renova o endereco IP da conexao ativa. Requer Administrador."/>
+                                        <Button x:Name="BtnFerrWinsock" Content="Reset Winsock" Height="36" Margin="0,0,0,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" ToolTip="Reinicia o catalogo Winsock. Requer reiniciar o computador depois. Requer Administrador."/>
+                                        <Button x:Name="BtnFerrPing" Content="Ping Google" Height="36" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" ToolTip="Testa conectividade externa (8.8.8.8)."/>
+                                        <Button x:Name="BtnFerrDns" Content="Teste DNS" Height="36" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" ToolTip="Resolve google.com para checar o DNS configurado."/>
+                                    </UniformGrid>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- REDE AVANCADA -->
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="REDE AVANCADA" Foreground="{DynamicResource BrushAccent}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <UniformGrid Columns="4">
+                                        <Button x:Name="BtnWifiPerfis" Content="Perfis Wi-Fi" Height="38" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
+                                        <Button x:Name="BtnConexoesPortas" Content="Conexoes / Portas" Height="38" Margin="6,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
+                                        <Button x:Name="BtnMapearUnidade" Content="Mapear Unidade de Rede" Height="38" Margin="6,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushSuccess}"/>
+                                        <Button x:Name="BtnVerUnidadesMapeadas" Content="Ver Unidades Mapeadas" Height="38" Margin="6,0,0,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                    </UniformGrid>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+
+                <!-- Limpeza e Otimizacao -->
+                <Grid x:Name="PanelLimpeza" Visibility="Collapsed">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="Limpeza e Otimizacao" Foreground="{DynamicResource BrushText}" FontSize="22" FontWeight="Bold" Margin="0,0,0,4"/>
+                    <TextBlock Grid.Row="1" Text="Limpeza de arquivos, reparos do Windows, IA/desempenho e analise de disco." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,14"/>
                     <ScrollViewer Grid.Row="2">
                         <Grid>
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
 
                             <!-- LIMPEZA -->
@@ -3062,6 +3840,7 @@ $script:XamlPanelsD = @'
                                 <StackPanel>
                                     <TextBlock Text="LIMPEZA" Foreground="{DynamicResource BrushAccent}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
                                     <CheckBox x:Name="ChkLimpTemp" Content="Temporarios do usuario" IsChecked="True"/>
+                                    <CheckBox x:Name="ChkLimpTempTodos" Content="Temporarios de TODOS os usuarios da maquina" ToolTip="Percorre C:\Users\* em vez de so o perfil logado. Requer Administrador."/>
                                     <CheckBox x:Name="ChkLimpWinTemp" Content="C:\Windows\Temp"/>
                                     <CheckBox x:Name="ChkLimpLixeira" Content="Esvaziar Lixeira"/>
                                     <CheckBox x:Name="ChkLimpWU" Content="Cache do Windows Update"/>
@@ -3085,50 +3864,21 @@ $script:XamlPanelsD = @'
                                 </StackPanel>
                             </Border>
 
-                            <!-- REDE -->
+                            <!-- LIMPEZA DO SISTEMA -->
                             <Border Grid.Row="1" Grid.Column="0" Margin="0,0,5,12" Style="{StaticResource Card}">
                                 <StackPanel>
-                                    <TextBlock Text="REDE" Foreground="{DynamicResource BrushAccent}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
-                                    <UniformGrid Columns="3">
-                                        <Button x:Name="BtnFerrFlushDns" Content="Flush DNS" Height="36" Margin="0,0,6,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" ToolTip="Limpa o cache de resolucao DNS local."/>
-                                        <Button x:Name="BtnFerrRenewIp" Content="Renew IP" Height="36" Margin="0,0,6,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" ToolTip="Libera e renova o endereco IP da conexao ativa. Requer Administrador."/>
-                                        <Button x:Name="BtnFerrWinsock" Content="Reset Winsock" Height="36" Margin="0,0,0,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" ToolTip="Reinicia o catalogo Winsock. Requer reiniciar o computador depois. Requer Administrador."/>
-                                        <Button x:Name="BtnFerrPing" Content="Ping Google" Height="36" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" ToolTip="Testa conectividade externa (8.8.8.8)."/>
-                                        <Button x:Name="BtnFerrDns" Content="Teste DNS" Height="36" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" ToolTip="Resolve google.com para checar o DNS configurado."/>
+                                    <TextBlock Text="LIMPEZA DO SISTEMA" Foreground="{DynamicResource BrushAccent}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <UniformGrid Columns="2">
+                                        <Button x:Name="BtnLimparPrefetch" Content="Limpar Prefetch" Height="36" Margin="0,0,6,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                        <Button x:Name="BtnLimparFontCache" Content="Limpar Cache de Fontes" Height="36" Margin="6,0,0,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                        <Button x:Name="BtnVerShadowCopies" Content="Ver Shadow Copies" Height="36" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                        <Button x:Name="BtnWinSxSCleanup" Content="WinSxS / DISM Cleanup" Height="36" Margin="6,0,0,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushWarning}"/>
                                     </UniformGrid>
                                 </StackPanel>
                             </Border>
 
-                            <!-- IMPRESSAO -->
-                            <Border Grid.Row="1" Grid.Column="1" Margin="5,0,0,12" Style="{StaticResource Card}">
-                                <StackPanel>
-                                    <TextBlock Text="IMPRESSAO" Foreground="{DynamicResource BrushAccent}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
-                                    <Button x:Name="BtnFerrSpooler" Content="Reiniciar Spooler e Limpar Fila" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Margin="0,0,0,8"/>
-                                    <Button x:Name="BtnAbrirImpressoras" Content="Abrir Impressoras" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
-                                </StackPanel>
-                            </Border>
-
-                            <!-- CONFIGURACOES -->
-                            <Border Grid.Row="2" Grid.Column="0" Margin="0,0,5,12" Style="{StaticResource Card}">
-                                <StackPanel>
-                                    <TextBlock Text="CONFIGURACOES" Foreground="{DynamicResource BrushTextMuted}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
-                                    <Button x:Name="BtnResetAppsJson" Content="Apagar JSON e Recriar Lista Padrao" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}" Margin="0,0,0,8"/>
-                                    <Button x:Name="BtnAbrirPastaFerramenta" Content="Abrir Pasta da Ferramenta" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
-                                </StackPanel>
-                            </Border>
-
-                            <!-- IA DO WINDOWS -->
-                            <Border Grid.Row="2" Grid.Column="1" Margin="5,0,0,12" Style="{StaticResource Card}">
-                                <StackPanel>
-                                    <TextBlock Text="IA DO WINDOWS" Foreground="{DynamicResource BrushWarning}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
-                                    <Button x:Name="BtnFerrRemoveAI" Content="Remove IA do Windows" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushWarning}" Margin="0,0,0,10"/>
-                                    <TextBlock Text="Libera memoria RAM!" Foreground="{DynamicResource BrushSuccess}" FontSize="11" FontWeight="SemiBold"/>
-                                    <TextBlock Text="NAO selecione as opcoes com Triangulo Amarelo!" Foreground="{DynamicResource BrushDanger}" FontSize="11" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,2,0,0"/>
-                                </StackPanel>
-                            </Border>
-
                             <!-- CACHE DE NAVEGADORES -->
-                            <Border Grid.Row="3" Grid.Column="0" Margin="0,0,5,12" Style="{StaticResource Card}">
+                            <Border Grid.Row="1" Grid.Column="1" Margin="5,0,0,12" Style="{StaticResource Card}">
                                 <StackPanel>
                                     <TextBlock Text="CACHE DE NAVEGADORES" Foreground="{DynamicResource BrushSuccess}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
                                     <CheckBox x:Name="ChkCacheChrome" Content="Google Chrome" IsChecked="True"/>
@@ -3138,30 +3888,76 @@ $script:XamlPanelsD = @'
                                 </StackPanel>
                             </Border>
 
-                            <!-- LIMPEZA DO SISTEMA -->
-                            <Border Grid.Row="3" Grid.Column="1" Margin="5,0,0,12" Style="{StaticResource Card}">
+                            <!-- IA DO WINDOWS -->
+                            <Border Grid.Row="2" Grid.Column="0" Margin="0,0,5,12" Style="{StaticResource Card}">
                                 <StackPanel>
-                                    <TextBlock Text="LIMPEZA DO SISTEMA" Foreground="{DynamicResource BrushAccent}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
-                                    <UniformGrid Columns="2">
-                                        <Button x:Name="BtnLimparPrefetch" Content="Limpar Prefetch" Height="36" Margin="0,0,6,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
-                                        <Button x:Name="BtnLimparFontCache" Content="Limpar Cache de Fontes" Height="36" Margin="6,0,0,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
-                                        <Button x:Name="BtnVerShadowCopies" Content="Ver Shadow Copies" Height="36" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
-                                        <Button x:Name="BtnWinSxSCleanup" Content="WinSxS / DISM Cleanup" Height="36" Margin="6,0,0,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushWarning}"/>
-                                    </UniformGrid>
-                                    <Button x:Name="BtnLimparCacheDns" Content="Limpar Cache DNS" Height="36" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" Margin="0,8,0,0"/>
+                                    <TextBlock Text="IA DO WINDOWS" Foreground="{DynamicResource BrushWarning}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <Button x:Name="BtnFerrRemoveAI" Content="Remove IA do Windows" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushWarning}" Margin="0,0,0,10"/>
+                                    <TextBlock Text="Libera memoria RAM!" Foreground="{DynamicResource BrushSuccess}" FontSize="11" FontWeight="SemiBold"/>
+                                    <TextBlock Text="NAO selecione as opcoes com Triangulo Amarelo!" Foreground="{DynamicResource BrushDanger}" FontSize="11" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,2,0,0"/>
                                 </StackPanel>
                             </Border>
 
-                            <!-- REDE AVANCADA -->
-                            <Border Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,0,0,12" Style="{StaticResource Card}">
+                            <!-- LIMPEZA AVANCADA -->
+                            <Border Grid.Row="2" Grid.Column="1" Margin="5,0,0,12" Style="{StaticResource Card}">
                                 <StackPanel>
-                                    <TextBlock Text="REDE AVANCADA" Foreground="{DynamicResource BrushAccent}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
-                                    <UniformGrid Columns="4">
-                                        <Button x:Name="BtnWifiPerfis" Content="Perfis Wi-Fi" Height="38" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
-                                        <Button x:Name="BtnConexoesPortas" Content="Conexoes / Portas" Height="38" Margin="6,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
-                                        <Button x:Name="BtnMapearUnidade" Content="Mapear Unidade de Rede" Height="38" Margin="6,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushSuccess}"/>
-                                        <Button x:Name="BtnVerUnidadesMapeadas" Content="Ver Unidades Mapeadas" Height="38" Margin="6,0,0,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                    <TextBlock Text="LIMPEZA AVANCADA" Foreground="{DynamicResource BrushDanger}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <Button x:Name="BtnRemoverWindowsOld" Content="Remover Windows.old" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}" Margin="0,0,0,8" ToolTip="Libera espaco da instalacao anterior do Windows. Depois disso nao e mais possivel voltar para a versao anterior. Requer Administrador."/>
+                                    <Button x:Name="BtnVerDriverStore" Content="Ver Drivers no DriverStore" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" ToolTip="So mostra a lista - a remocao de driver duplicado e feita manualmente com pnputil pra evitar risco de remover um driver em uso."/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- ANALISE DE DISCO -->
+                            <Border Grid.Row="3" Grid.Column="0" Margin="0,0,5,12" Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="ANALISE DE DISCO" Foreground="{DynamicResource BrushAccent}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <TextBlock Text="Mostra as maiores pastas dentro do perfil do usuario logado (Downloads, AppData, Desktop, etc.). Pode levar alguns minutos em perfis grandes." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <Button x:Name="BtnAnalisarDisco" Content="Analisar Espaco do Perfil do Usuario" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- OTIMIZACAO -->
+                            <Border Grid.Row="3" Grid.Column="1" Margin="5,0,0,12" Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="OTIMIZACAO" Foreground="{DynamicResource BrushSuccess}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <UniformGrid Columns="2">
+                                        <Button x:Name="BtnGerenciarInicializacao" Content="Itens de Inicializacao" Height="36" Margin="0,0,6,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
+                                        <Button x:Name="BtnResetWU" Content="Resetar Windows Update" Height="36" Margin="6,0,0,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                        <Button x:Name="BtnReconstruirIndice" Content="Reconstruir Indice de Busca" Height="36" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                        <Button x:Name="BtnOtimizarDisco" Content="Otimizar Disco (TRIM)" Height="36" Margin="6,0,0,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
                                     </UniformGrid>
+                                    <Button x:Name="BtnRelatorioBateria" Content="Relatorio de Bateria" Height="36" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" Margin="0,8,0,0"/>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </ScrollViewer>
+                </Grid>
+
+                <!-- Ferramentas -->
+                <Grid x:Name="PanelFerramentas" Visibility="Collapsed">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="Ferramentas" Foreground="{DynamicResource BrushText}" FontSize="22" FontWeight="Bold" Margin="0,0,0,4"/>
+                    <TextBlock Grid.Row="1" Text="Impressao e configuracoes da ferramenta." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,14"/>
+                    <ScrollViewer Grid.Row="2">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+
+                            <!-- IMPRESSAO -->
+                            <Border Grid.Row="0" Grid.Column="0" Margin="0,0,5,12" Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="IMPRESSAO" Foreground="{DynamicResource BrushAccent}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <Button x:Name="BtnFerrSpooler" Content="Reiniciar Spooler e Limpar Fila" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Margin="0,0,0,8"/>
+                                    <Button x:Name="BtnAbrirImpressoras" Content="Abrir Impressoras" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- CONFIGURACOES -->
+                            <Border Grid.Row="0" Grid.Column="1" Margin="5,0,0,12" Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="CONFIGURACOES" Foreground="{DynamicResource BrushTextMuted}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <Button x:Name="BtnResetAppsJson" Content="Apagar JSON e Recriar Lista Padrao" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}" Margin="0,0,0,8"/>
+                                    <Button x:Name="BtnAbrirPastaFerramenta" Content="Abrir Pasta da Ferramenta" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
                                 </StackPanel>
                             </Border>
                         </Grid>
@@ -3215,7 +4011,10 @@ function Show-MainWindow {
         Inicio    = $window.FindName("PanelInicio")
         Checklist = $window.FindName("PanelChecklist")
         Instalar  = $window.FindName("PanelInstalar")
+        Diagnostico = $window.FindName("PanelDiagnostico")
+        Rede      = $window.FindName("PanelRede")
         Impressao = $window.FindName("PanelImpressao")
+        Limpeza   = $window.FindName("PanelLimpeza")
         Ferramentas = $window.FindName("PanelFerramentas")
         Logs      = $window.FindName("PanelLogs")
     }
@@ -3223,13 +4022,17 @@ function Show-MainWindow {
         Inicio    = $window.FindName("NavInicio")
         Checklist = $window.FindName("NavChecklist")
         Instalar  = $window.FindName("NavInstalar")
+        Diagnostico = $window.FindName("NavDiagnostico")
+        Rede      = $window.FindName("NavRede")
         Impressao = $window.FindName("NavImpressao")
+        Limpeza   = $window.FindName("NavLimpeza")
         Ferramentas = $window.FindName("NavFerramentas")
         Logs      = $window.FindName("NavLogs")
     }
     $panelTitles = @{
         Inicio="Inicio"; Checklist="Checklist"; Instalar="Instalar Aplicativos"
-        Impressao="Impressao"; Ferramentas="Ferramentas"; Logs="Logs"
+        Diagnostico="Diagnostico"; Rede="Rede"; Impressao="Impressao"; Limpeza="Limpeza e Otimizacao"
+        Ferramentas="Ferramentas"; Logs="Logs"
     }
     # Scriptblock (nao function aninhada) - funcoes definidas dentro de outra
     # funcao nao ficam visiveis de dentro de closures de eventos WPF (Add_Click),
@@ -3263,8 +4066,11 @@ function Show-MainWindow {
     $homeShortcuts = @(
         @{ Key="Checklist";   Title="Checklist";            Desc="Formatacao e configuracao passo a passo";                     Categoria="Setup";         Mono="CK"; Cor="#4C6FFF" }
         @{ Key="Instalar";    Title="Instalar Aplicativos";  Desc="Lista padrao, busca winget/choco e Pacote Extra";             Categoria="Instalacao";    Mono="IN"; Cor="#22C55E" }
+        @{ Key="Diagnostico"; Title="Diagnostico";           Desc="Relatorio do sistema, ativacao do Windows/Office e boot";     Categoria="Diagnostico";   Mono="DG"; Cor="#2563EB" }
+        @{ Key="Rede";        Title="Rede";                  Desc="DNS, IP, Winsock, Wi-Fi, conexoes e unidades mapeadas";       Categoria="Diagnostico";   Mono="RD"; Cor="#0EA5E9" }
         @{ Key="Impressao";   Title="Impressao";             Desc="Spooler, monitor SNMP e gerenciamento de impressoras";        Categoria="Equipamentos";  Mono="IP"; Cor="#7C6FFA" }
-        @{ Key="Ferramentas"; Title="Ferramentas";           Desc="Limpeza, rede, reparos, desinstalador seguro e mais";         Categoria="Avancado";      Mono="FR"; Cor="#EF4444" }
+        @{ Key="Limpeza";     Title="Limpeza e Otimizacao";  Desc="Limpeza de arquivos, reparos do Windows e desempenho";        Categoria="Manutencao";    Mono="LO"; Cor="#14B8A6" }
+        @{ Key="Ferramentas"; Title="Ferramentas";           Desc="Impressao e configuracoes da ferramenta";                     Categoria="Avancado";      Mono="FR"; Cor="#EF4444" }
         @{ Key="Logs";        Title="Logs";                  Desc="Historico de acoes e erros da ferramenta";                    Categoria="Historico";     Mono="LG"; Cor="#6B7280" }
     )
     foreach ($shortcut in $homeShortcuts) {
@@ -3710,14 +4516,68 @@ function Show-MainWindow {
         Show-Info ("CSV exportado em:`n{0}" -f $path)
     }.GetNewClosure())
 
+    # ---- Diagnostico ----
+    $diagSubPanels = @{
+        Geral    = $window.FindName("SubDiagGeral")
+        Hardware = $window.FindName("SubDiagHardware")
+        Eventos  = $window.FindName("SubDiagEventos")
+        Ativacao = $window.FindName("SubDiagAtivacao")
+    }
+    $diagTabButtons = @{
+        Geral    = $window.FindName("TabDiagGeral")
+        Hardware = $window.FindName("TabDiagHardware")
+        Eventos  = $window.FindName("TabDiagEventos")
+        Ativacao = $window.FindName("TabDiagAtivacao")
+    }
+    $ShowDiagTab = {
+        param([string]$Key)
+        foreach ($k in $diagSubPanels.Keys) {
+            $diagSubPanels[$k].Visibility = if ($k -eq $Key) { "Visible" } else { "Collapsed" }
+            $diagTabButtons[$k].Background = if ($k -eq $Key) { Get-ThemeBrush "BrushActiveNav" } else { Get-Brush "Transparent" }
+            $diagTabButtons[$k].Foreground = if ($k -eq $Key) { Get-ThemeBrush "BrushAccent" } else { Get-ThemeBrush "BrushTextMuted" }
+            $diagTabButtons[$k].FontWeight = if ($k -eq $Key) { "Bold" } else { "Normal" }
+        }
+    }.GetNewClosure()
+    foreach ($diagKey in $diagTabButtons.Keys) {
+        $diagTabButtons[$diagKey].Add_Click({ & $ShowDiagTab -Key $diagKey }.GetNewClosure())
+    }
+
+    $txtDiagReport = $window.FindName("TxtDiagReport")
+    $window.FindName("BtnDiagMostrarInfo").Add_Click({ $txtDiagReport.Text = Get-DiagnosticReportText }.GetNewClosure())
+    $window.FindName("BtnDiagSalvarTxt").Add_Click({
+        if ([string]::IsNullOrWhiteSpace($txtDiagReport.Text)) { $txtDiagReport.Text = Get-DiagnosticReportText }
+        $path = Save-DiagnosticReportTxt -Text $txtDiagReport.Text
+        Show-Info ("Relatorio salvo em:`n{0}" -f $path)
+    }.GetNewClosure())
+    $window.FindName("BtnDiagSalvarHtml").Add_Click({
+        if ([string]::IsNullOrWhiteSpace($txtDiagReport.Text)) { $txtDiagReport.Text = Get-DiagnosticReportText }
+        $path = Save-DiagnosticReportHtml -Text $txtDiagReport.Text
+        Show-Info ("Relatorio salvo em:`n{0}" -f $path)
+    }.GetNewClosure())
+    $window.FindName("BtnDiagCopiar").Add_Click({
+        if ([string]::IsNullOrWhiteSpace($txtDiagReport.Text)) { $txtDiagReport.Text = Get-DiagnosticReportText }
+        try { Set-Clipboard -Value $txtDiagReport.Text; Show-Info "Relatorio copiado para a area de transferencia." } catch { Show-Warning "Nao foi possivel copiar." }
+    }.GetNewClosure())
+    $window.FindName("BtnDiagVerRelatorios").Add_Click({ Open-ReportsFolder }.GetNewClosure())
+    $window.FindName("BtnDiagRelatorioBateria").Add_Click({ Invoke-BatteryReport }.GetNewClosure())
+    $window.FindName("BtnDiagAbrirBateria").Add_Click({ Open-BatterySettings }.GetNewClosure())
+
+    $txtDiagAtivacao   = $window.FindName("TxtDiagAtivacao")
+    $dgDiagBootHistory = $window.FindName("DgDiagBootHistory")
+    $window.FindName("BtnDiagVerificarAtivacao").Add_Click({ $txtDiagAtivacao.Text = Get-ActivationStatusText }.GetNewClosure())
+    $window.FindName("BtnDiagHistoricoBoot").Add_Click({ $dgDiagBootHistory.ItemsSource = @(Get-BootHistory) }.GetNewClosure())
+    $window.FindName("BtnDiagAtivarScript").Add_Click({ Invoke-ActivationByScript }.GetNewClosure())
+
     # ---- Ferramentas ----
-    $chkLimpTemp    = $window.FindName("ChkLimpTemp")
-    $chkLimpWinTemp = $window.FindName("ChkLimpWinTemp")
-    $chkLimpLixeira = $window.FindName("ChkLimpLixeira")
-    $chkLimpWU      = $window.FindName("ChkLimpWU")
-    $chkLimpGeo     = $window.FindName("ChkLimpGeo")
+    $chkLimpTemp      = $window.FindName("ChkLimpTemp")
+    $chkLimpTempTodos = $window.FindName("ChkLimpTempTodos")
+    $chkLimpWinTemp   = $window.FindName("ChkLimpWinTemp")
+    $chkLimpLixeira   = $window.FindName("ChkLimpLixeira")
+    $chkLimpWU        = $window.FindName("ChkLimpWU")
+    $chkLimpGeo       = $window.FindName("ChkLimpGeo")
     $window.FindName("BtnExecutarLimpeza").Add_Click({
         if ($chkLimpTemp.IsChecked)    { Invoke-CleanupOperation }
+        if ($chkLimpTempTodos.IsChecked) { Clear-AllUsersTempFolders }
         if ($chkLimpWinTemp.IsChecked) { Invoke-CleanupOperation -IncludeWindowsTemp }
         if ($chkLimpLixeira.IsChecked) { Clear-RecycleBinContents }
         if ($chkLimpWU.IsChecked)      { Clear-WindowsUpdateCache }
@@ -3768,7 +4628,15 @@ function Show-MainWindow {
     $window.FindName("BtnLimparFontCache").Add_Click({ Clear-FontCacheData }.GetNewClosure())
     $window.FindName("BtnVerShadowCopies").Add_Click({ Show-TextResultDialog -Title "Shadow Copies" -Text (Get-ShadowCopiesInfo) }.GetNewClosure())
     $window.FindName("BtnWinSxSCleanup").Add_Click({ Invoke-DismComponentCleanup }.GetNewClosure())
-    $window.FindName("BtnLimparCacheDns").Add_Click({ Invoke-NetworkTool -Action "Flush DNS" }.GetNewClosure())
+
+    $window.FindName("BtnRemoverWindowsOld").Add_Click({ Clear-WindowsOldFolder }.GetNewClosure())
+    $window.FindName("BtnVerDriverStore").Add_Click({ Show-TextResultDialog -Title "Drivers no DriverStore" -Text (Get-DriverStoreInfo) }.GetNewClosure())
+    $window.FindName("BtnAnalisarDisco").Add_Click({ Show-TextResultDialog -Title ("Maiores pastas em {0}" -f $env:USERPROFILE) -Text (Get-DiskUsageReport -RootPath $env:USERPROFILE) }.GetNewClosure())
+    $window.FindName("BtnGerenciarInicializacao").Add_Click({ Show-StartupManagerDialog }.GetNewClosure())
+    $window.FindName("BtnResetWU").Add_Click({ Invoke-WindowsUpdateReset }.GetNewClosure())
+    $window.FindName("BtnReconstruirIndice").Add_Click({ Invoke-SearchIndexRebuild }.GetNewClosure())
+    $window.FindName("BtnOtimizarDisco").Add_Click({ Invoke-DiskOptimize -Drive "C" }.GetNewClosure())
+    $window.FindName("BtnRelatorioBateria").Add_Click({ Invoke-BatteryReport }.GetNewClosure())
 
     $window.FindName("BtnWifiPerfis").Add_Click({ Show-TextResultDialog -Title "Perfis Wi-Fi" -Text (Get-WifiProfilesInfo) }.GetNewClosure())
     $window.FindName("BtnConexoesPortas").Add_Click({ Show-TextResultDialog -Title "Conexoes / Portas" -Text (Get-NetworkConnectionsInfo) }.GetNewClosure())
