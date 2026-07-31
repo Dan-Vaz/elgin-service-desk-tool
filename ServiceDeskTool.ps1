@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.4"
+$global:AppVersion    = "3.5"
 $global:SchemaVersion = 1
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
@@ -2805,9 +2805,134 @@ function Invoke-SafeUninstall {
         Write-Log -Message ("[UNINSTALL] {0} finalizado. ExitCode {1}" -f $Program.Name,$r.ExitCode) -Level "SUCCESS"
         Close-BusyOverlay -Overlay $ov; $ov = $null
         Show-Info ("Desinstalacao de '{0}' finalizada. Se o desinstalador abriu uma janela propria, siga as instrucoes nela." -f $Program.Name)
+
+        $residuos = @(Find-UninstallLeftovers -Program $Program)
+        if ($residuos.Count -gt 0) { Show-LeftoverDialog -ProgramName $Program.Name -Leftovers $residuos }
         return $true
     } catch { Show-ErrorBox ("Falha ao desinstalar.`n`n{0}" -f $_.Exception.Message); return $false
     } finally { Close-BusyOverlay -Overlay $ov }
+}
+
+# ---- LIMPEZA DE RESIDUOS (estilo Revo Uninstaller) ----
+# Depois que o desinstalador oficial do programa roda, sobra costumeiramente
+# pasta em Program Files/AppData e chave de registro em HKCU/HKLM Software -
+# essa varredura procura por essas sobras usando o nome do programa como
+# termo de busca (mesma limitacao de qualquer scanner desse tipo, incluindo
+# o Revo de verdade: pode dar falso positivo, por isso SEMPRE mostra uma
+# lista pra revisao com tudo pre-marcado, nunca apaga sozinho).
+function Find-UninstallLeftovers {
+    param([Parameter(Mandatory=$true)]$Program)
+    $termoBusca = ([string]$Program.Name) -replace '[^a-zA-Z0-9 ]',''
+    $palavras = @($termoBusca -split '\s+' | Where-Object { $_.Length -ge 3 })
+    if ($palavras.Count -eq 0) { return @() }
+
+    $achados = New-Object System.Collections.ArrayList
+
+    $pastasBase = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramData, $env:LOCALAPPDATA, $env:APPDATA) |
+        Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+    foreach ($base in $pastasBase) {
+        Get-ChildItem -Path $base -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            foreach ($p in $palavras) {
+                if ($_.Name -match [regex]::Escape($p)) {
+                    [void]$achados.Add([PSCustomObject]@{ Tipo="Pasta"; Caminho=$_.FullName })
+                    break
+                }
+            }
+        }
+    }
+
+    $chavesBase = @("HKCU:\SOFTWARE","HKLM:\SOFTWARE","HKLM:\SOFTWARE\WOW6432Node")
+    foreach ($base in $chavesBase) {
+        if (-not (Test-Path $base)) { continue }
+        Get-ChildItem -Path $base -ErrorAction SilentlyContinue | ForEach-Object {
+            foreach ($p in $palavras) {
+                if ($_.PSChildName -match [regex]::Escape($p)) {
+                    [void]$achados.Add([PSCustomObject]@{ Tipo="Registro"; Caminho=$_.PSPath })
+                    break
+                }
+            }
+        }
+    }
+
+    return @($achados | Sort-Object Tipo,Caminho -Unique)
+}
+
+function Remove-UninstallLeftover {
+    param([Parameter(Mandatory=$true)]$Item)
+    try {
+        if (Test-Path $Item.Caminho) { Remove-Item -Path $Item.Caminho -Recurse -Force -ErrorAction Stop }
+        return $true
+    } catch {
+        Write-Log -Message ("[UNINSTALL] Falha ao remover residuo {0}: {1}" -f $Item.Caminho,$_.Exception.Message) -Level "ERROR"
+        return $false
+    }
+}
+
+$script:LeftoverDialogXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Limpar Residuos" Height="520" Width="720"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
+        Background="{DynamicResource BrushWindowBg}">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <TextBlock Grid.Row="0" x:Name="TxtLeftoverTitle" Text="Residuos encontrados" FontSize="18" FontWeight="Bold" Foreground="{DynamicResource BrushText}" Margin="0,0,0,4"/>
+        <TextBlock Grid.Row="1" Text="Pastas e chaves de registro que sobraram apos a desinstalacao (podem incluir falsos positivos - revise antes de remover)." Foreground="{DynamicResource BrushTextMuted}" FontSize="11.5" TextWrapping="Wrap" Margin="0,0,0,12"/>
+        <Border Grid.Row="2" Background="{DynamicResource BrushSurfaceAlt}" BorderBrush="{DynamicResource BrushBorder}" BorderThickness="1" CornerRadius="8">
+            <ScrollViewer Padding="12">
+                <StackPanel x:Name="SpLeftovers"/>
+            </ScrollViewer>
+        </Border>
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+            <Button x:Name="BtnLeftoverTodos" Content="Selecionar Tudo" Width="130" Height="34" Margin="0,0,8,0" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" BorderThickness="0" Cursor="Hand"/>
+            <Button x:Name="BtnLeftoverNenhum" Content="Desmarcar Tudo" Width="130" Height="34" Margin="0,0,8,0" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" BorderThickness="0" Cursor="Hand"/>
+            <Button x:Name="BtnLeftoverPular" Content="Pular" Width="100" Height="34" Margin="0,0,8,0" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" BorderThickness="0" Cursor="Hand"/>
+            <Button x:Name="BtnLeftoverRemover" Content="Remover Selecionados" Width="180" Height="34" Background="{DynamicResource BrushDanger}" Foreground="White" BorderThickness="0" FontWeight="Bold" Cursor="Hand"/>
+        </StackPanel>
+    </Grid>
+</Window>
+'@
+
+function Show-LeftoverDialog {
+    param([Parameter(Mandatory=$true)][string]$ProgramName, [Parameter(Mandatory=$true)][array]$Leftovers)
+    $reader = [System.Xml.XmlNodeReader]::new([xml]$script:LeftoverDialogXaml)
+    $dlg = [System.Windows.Markup.XamlReader]::Load($reader)
+    $dlg.Owner = $global:MainWindow
+    Set-DialogTheme -Dialog $dlg
+    $dlg.FindName("TxtLeftoverTitle").Text = ("Residuos encontrados de '{0}' ({1})" -f $ProgramName,$Leftovers.Count)
+
+    $spLeftovers = $dlg.FindName("SpLeftovers")
+    $leftoverCheckboxes = @()
+    foreach ($item in $Leftovers) {
+        $cb = New-Object System.Windows.Controls.CheckBox
+        $cb.Content = ("[{0}] {1}" -f $item.Tipo,$item.Caminho)
+        $cb.IsChecked = $true
+        $cb.Tag = $item
+        $cb.Margin = "0,0,0,8"
+        [void]$spLeftovers.Children.Add($cb)
+        $leftoverCheckboxes += $cb
+    }
+
+    $dlg.FindName("BtnLeftoverTodos").Add_Click({ foreach ($cb in $leftoverCheckboxes) { $cb.IsChecked = $true } }.GetNewClosure())
+    $dlg.FindName("BtnLeftoverNenhum").Add_Click({ foreach ($cb in $leftoverCheckboxes) { $cb.IsChecked = $false } }.GetNewClosure())
+    $dlg.FindName("BtnLeftoverPular").Add_Click({ $dlg.Close() }.GetNewClosure())
+    $dlg.FindName("BtnLeftoverRemover").Add_Click({
+        $selecionados = @($leftoverCheckboxes | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag })
+        if ($selecionados.Count -eq 0) { Show-Warning "Nenhum item selecionado."; return }
+        if (-not (Confirm-Action ("Remover {0} item(ns) selecionado(s)? Essa acao nao pode ser desfeita." -f $selecionados.Count) "Remover Residuos")) { return }
+        $ok = 0; $falhou = 0
+        foreach ($item in $selecionados) { if (Remove-UninstallLeftover -Item $item) { $ok++ } else { $falhou++ } }
+        Write-Log -Message ("[UNINSTALL] Residuos removidos: {0} ok, {1} falharam." -f $ok,$falhou) -Level "SUCCESS"
+        $dlg.Close()
+        Show-Info ("Residuos removidos: {0}. Falhas: {1}." -f $ok,$falhou)
+    }.GetNewClosure())
+
+    [void]$dlg.ShowDialog()
 }
 
 # ---- CONFIGURACOES DA FERRAMENTA ----
@@ -3663,6 +3788,70 @@ function Get-BootHistory {
     } catch { return @() }
 }
 
+# ---- HARDWARE E DRIVERS ----
+# Lista TODOS os dispositivos com driver assinado (nao so os com problema -
+# Win32_PnPSignedDriver ja cobre isso, diferente de filtrar por
+# ConfigManagerErrorCode). Baixar/instalar em si e feito pelo proprio
+# Windows Update (fonte oficial, sempre compativel com o hardware) ou pelo
+# site do fabricante - nao existe uma forma segura e universal de "baixar o
+# arquivo certo" pra qualquer hardware/fabricante fora dessas duas fontes
+# oficiais, entao a ferramenta abre elas em vez de tentar reinventar isso.
+function Get-DeviceDriverInventory {
+    $ov = Show-BusyOverlay -Text "Escaneando dispositivos e drivers..."
+    try {
+        $devices = Get-CimInstance Win32_PnPSignedDriver -ErrorAction SilentlyContinue |
+            Where-Object { $_.DeviceName } | Sort-Object DeviceClass,DeviceName
+        return @($devices | ForEach-Object {
+            $dataStr = ""
+            if ($_.DriverDate) {
+                try {
+                    $dt = if ($_.DriverDate -is [datetime]) { $_.DriverDate } else { [Management.ManagementDateTimeConverter]::ToDateTime([string]$_.DriverDate) }
+                    $dataStr = $dt.ToString("dd/MM/yyyy")
+                } catch { $dataStr = "" }
+            }
+            [PSCustomObject]@{
+                Dispositivo  = [string]$_.DeviceName
+                Classe       = [string]$_.DeviceClass
+                Fabricante   = [string]$_.Manufacturer
+                VersaoDriver = [string]$_.DriverVersion
+                DataDriver   = $dataStr
+            }
+        })
+    } finally { Close-BusyOverlay -Overlay $ov }
+}
+
+function Open-WindowsUpdateDriverScan {
+    try { & pnputil.exe /scan-devices | Out-Null } catch {}
+    try { Start-Process "ms-settings:windowsupdate-optionalupdates" -ErrorAction Stop }
+    catch { try { Start-Process "ms-settings:windowsupdate" } catch { Show-Warning "Nao foi possivel abrir o Windows Update."; return } }
+    Show-Info "Abrindo Windows Update. Em 'Atualizacoes opcionais > Atualizacoes de driver' aparecem os drivers disponiveis (fonte oficial da Microsoft) para instalar."
+}
+
+# So Dell tem um padrao de URL por Service Tag confirmado e estavel o
+# suficiente pra linkar direto - HP/Lenovo/outros vao pra pagina geral de
+# drivers do fabricante (link profundo por numero de serie neles nao e
+# confiavel o bastante pra garantir que abre no lugar certo).
+function Open-ManufacturerDriverPage {
+    try {
+        $cs   = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+        $bios = Get-CimInstance Win32_BIOS -ErrorAction Stop
+        $fabricante = [string]$cs.Manufacturer
+        $tag        = [string]$bios.SerialNumber
+        $url = $null
+        if ($fabricante -match "Dell") { $url = "https://www.dell.com/support/home/pt-br/product-support/servicetag/{0}/drivers" -f $tag }
+        elseif ($fabricante -match "HP|Hewlett") { $url = "https://support.hp.com/us-en/drivers" }
+        elseif ($fabricante -match "Lenovo") { $url = "https://pcsupport.lenovo.com/" }
+        elseif ($fabricante -match "ASUS") { $url = "https://www.asus.com/support/" }
+        elseif ($fabricante -match "Acer") { $url = "https://www.acer.com/br-pt/support" }
+        if ($url) {
+            Start-Process $url
+            if ($fabricante -notmatch "Dell") { Show-Info ("Site do fabricante aberto. Use o Serial/Service Tag para localizar os drivers: {0}" -f $tag) }
+        } else {
+            Show-Warning ("Fabricante '{0}' nao reconhecido para link direto. Serial/Service Tag da maquina: {1}" -f $fabricante,$tag)
+        }
+    } catch { Show-Warning "Nao foi possivel identificar o fabricante/service tag da maquina." }
+}
+
 # Ativacao por script (Microsoft Activation Scripts, get.activated.win) -
 # abre uma janela de PowerShell PROPRIA e visivel (mesmo padrao ja usado em
 # Invoke-RemoveWindowsAI: escreve um .cmd temporario e da Start-Process nele,
@@ -3743,7 +3932,30 @@ $script:XamlPanelsD = @'
 
                         <!-- HARDWARE E DRIVERS -->
                         <Grid x:Name="SubDiagHardware" Visibility="Collapsed">
-                            <TextBlock Text="Ainda sem conteudo definido para esta aba - aguardando referencia visual (print) pra portar certo." Foreground="{DynamicResource BrushTextMuted}" FontSize="13" TextWrapping="Wrap" VerticalAlignment="Top" HorizontalAlignment="Left"/>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Text="Lista todos os dispositivos e drivers instalados (nao so os com problema). Para baixar/atualizar, use o Windows Update (fonte oficial da Microsoft) ou o site do fabricante." Foreground="{DynamicResource BrushTextMuted}" FontSize="11.5" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                            <Border Grid.Row="1" Background="{DynamicResource BrushSurfaceAlt}" BorderBrush="{DynamicResource BrushBorder}" BorderThickness="1" CornerRadius="8" Margin="0,0,0,12">
+                                <DataGrid x:Name="DgDiagDrivers" AutoGenerateColumns="False" IsReadOnly="True" Background="Transparent" Foreground="{DynamicResource BrushText}" BorderThickness="0"
+                                          HeadersVisibility="Column" RowBackground="{DynamicResource BrushSurfaceAlt}" AlternatingRowBackground="{DynamicResource BrushSurface}"
+                                          GridLinesVisibility="None" RowHeight="30">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="DISPOSITIVO" Binding="{Binding Dispositivo}" Width="2.2*"/>
+                                        <DataGridTextColumn Header="CLASSE" Binding="{Binding Classe}" Width="1*"/>
+                                        <DataGridTextColumn Header="FABRICANTE" Binding="{Binding Fabricante}" Width="1.2*"/>
+                                        <DataGridTextColumn Header="VERSAO DRIVER" Binding="{Binding VersaoDriver}" Width="1*"/>
+                                        <DataGridTextColumn Header="DATA" Binding="{Binding DataDriver}" Width="0.8*"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Border>
+                            <UniformGrid Grid.Row="2" Columns="3">
+                                <Button x:Name="BtnDiagEscanearDrivers" Content="Escanear Dispositivos" Height="38" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
+                                <Button x:Name="BtnDiagWuDrivers" Content="Verificar no Windows Update" Height="38" Margin="6,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                <Button x:Name="BtnDiagSiteFabricante" Content="Site do Fabricante (Drivers)" Height="38" Margin="6,0,0,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                            </UniformGrid>
                         </Grid>
 
                         <!-- EVENTOS -->
@@ -3856,9 +4068,8 @@ $script:XamlPanelsD = @'
                                     <UniformGrid Columns="2">
                                         <Button x:Name="BtnSfcScan" Content="SFC /scannow" Height="38" Margin="0,0,6,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
                                         <Button x:Name="BtnDismRestore" Content="DISM RestoreHealth" Height="38" Margin="6,0,0,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
-                                        <Button x:Name="BtnWingetUpgrade" Content="Atualizar Apps Winget" Height="38" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushSuccess}"/>
-                                        <Button x:Name="BtnUninstaller" Content="Desinstalador Seguro" Height="38" Margin="6,0,0,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}"/>
                                     </UniformGrid>
+                                    <Button x:Name="BtnWingetUpgrade" Content="Atualizar Apps Winget" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushSuccess}" Margin="0,0,0,8"/>
                                     <Button x:Name="BtnChkdsk" Content="Chkdsk /f (agendar no proximo boot)" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushWarning}" Margin="0,8,0,0" ToolTip="Verifica e corrige erros no disco C: - como o disco esta em uso, a checagem so roda na proxima reinicializacao. Requer Administrador."/>
                                     <Button x:Name="BtnMaxPerformance" Content="Habilitar Maximo Desempenho" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Margin="0,8,0,0"/>
                                 </StackPanel>
@@ -3937,14 +4148,23 @@ $script:XamlPanelsD = @'
                 <Grid x:Name="PanelFerramentas" Visibility="Collapsed">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <TextBlock Grid.Row="0" Text="Ferramentas" Foreground="{DynamicResource BrushText}" FontSize="22" FontWeight="Bold" Margin="0,0,0,4"/>
-                    <TextBlock Grid.Row="1" Text="Impressao e configuracoes da ferramenta." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,14"/>
+                    <TextBlock Grid.Row="1" Text="Desinstalador, impressao e configuracoes da ferramenta." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,14"/>
                     <ScrollViewer Grid.Row="2">
                         <Grid>
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+
+                            <!-- DESINSTALADOR -->
+                            <Border Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,0,0,12" Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="DESINSTALADOR" Foreground="{DynamicResource BrushDanger}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <TextBlock Text="Desinstala o programa e depois procura residuos (pastas e chaves de registro) deixados para tras, igual o Revo Uninstaller - voce revisa e escolhe o que apagar." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <Button x:Name="BtnUninstaller" Content="Desinstalador Seguro" Height="38" Width="240" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}"/>
+                                </StackPanel>
+                            </Border>
 
                             <!-- IMPRESSAO -->
-                            <Border Grid.Row="0" Grid.Column="0" Margin="0,0,5,12" Style="{StaticResource Card}">
+                            <Border Grid.Row="1" Grid.Column="0" Margin="0,0,5,12" Style="{StaticResource Card}">
                                 <StackPanel>
                                     <TextBlock Text="IMPRESSAO" Foreground="{DynamicResource BrushAccent}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
                                     <Button x:Name="BtnFerrSpooler" Content="Reiniciar Spooler e Limpar Fila" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Margin="0,0,0,8"/>
@@ -3953,7 +4173,7 @@ $script:XamlPanelsD = @'
                             </Border>
 
                             <!-- CONFIGURACOES -->
-                            <Border Grid.Row="0" Grid.Column="1" Margin="5,0,0,12" Style="{StaticResource Card}">
+                            <Border Grid.Row="1" Grid.Column="1" Margin="5,0,0,12" Style="{StaticResource Card}">
                                 <StackPanel>
                                     <TextBlock Text="CONFIGURACOES" Foreground="{DynamicResource BrushTextMuted}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
                                     <Button x:Name="BtnResetAppsJson" Content="Apagar JSON e Recriar Lista Padrao" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}" Margin="0,0,0,8"/>
@@ -4070,7 +4290,7 @@ function Show-MainWindow {
         @{ Key="Rede";        Title="Rede";                  Desc="DNS, IP, Winsock, Wi-Fi, conexoes e unidades mapeadas";       Categoria="Diagnostico";   Mono="RD"; Cor="#0EA5E9" }
         @{ Key="Impressao";   Title="Impressao";             Desc="Spooler, monitor SNMP e gerenciamento de impressoras";        Categoria="Equipamentos";  Mono="IP"; Cor="#7C6FFA" }
         @{ Key="Limpeza";     Title="Limpeza e Otimizacao";  Desc="Limpeza de arquivos, reparos do Windows e desempenho";        Categoria="Manutencao";    Mono="LO"; Cor="#14B8A6" }
-        @{ Key="Ferramentas"; Title="Ferramentas";           Desc="Impressao e configuracoes da ferramenta";                     Categoria="Avancado";      Mono="FR"; Cor="#EF4444" }
+        @{ Key="Ferramentas"; Title="Ferramentas";           Desc="Desinstalador seguro, impressao e configuracoes da ferramenta"; Categoria="Avancado";      Mono="FR"; Cor="#EF4444" }
         @{ Key="Logs";        Title="Logs";                  Desc="Historico de acoes e erros da ferramenta";                    Categoria="Historico";     Mono="LG"; Cor="#6B7280" }
     )
     foreach ($shortcut in $homeShortcuts) {
@@ -4567,6 +4787,11 @@ function Show-MainWindow {
     $window.FindName("BtnDiagVerificarAtivacao").Add_Click({ $txtDiagAtivacao.Text = Get-ActivationStatusText }.GetNewClosure())
     $window.FindName("BtnDiagHistoricoBoot").Add_Click({ $dgDiagBootHistory.ItemsSource = @(Get-BootHistory) }.GetNewClosure())
     $window.FindName("BtnDiagAtivarScript").Add_Click({ Invoke-ActivationByScript }.GetNewClosure())
+
+    $dgDiagDrivers = $window.FindName("DgDiagDrivers")
+    $window.FindName("BtnDiagEscanearDrivers").Add_Click({ $dgDiagDrivers.ItemsSource = @(Get-DeviceDriverInventory) }.GetNewClosure())
+    $window.FindName("BtnDiagWuDrivers").Add_Click({ Open-WindowsUpdateDriverScan }.GetNewClosure())
+    $window.FindName("BtnDiagSiteFabricante").Add_Click({ Open-ManufacturerDriverPage }.GetNewClosure())
 
     # ---- Ferramentas ----
     $chkLimpTemp      = $window.FindName("ChkLimpTemp")
