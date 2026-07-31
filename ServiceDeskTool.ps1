@@ -460,51 +460,51 @@ function Get-ThemeResourceDictionaryXaml {
     if ($Theme -eq "Light") {
         return @'
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <SolidColorBrush x:Key="BrushWindowBg"    Color="#F3F4F6"/>
+    <SolidColorBrush x:Key="BrushWindowBg"    Color="#F5F5F9"/>
     <SolidColorBrush x:Key="BrushSidebarBg"   Color="#FFFFFF"/>
-    <SolidColorBrush x:Key="BrushSidebarBrd"  Color="#E5E7EB"/>
+    <SolidColorBrush x:Key="BrushSidebarBrd"  Color="#E7E7F0"/>
     <SolidColorBrush x:Key="BrushSurface"     Color="#FFFFFF"/>
-    <SolidColorBrush x:Key="BrushSurfaceAlt"  Color="#F9FAFB"/>
-    <SolidColorBrush x:Key="BrushBorder"      Color="#E5E7EB"/>
-    <SolidColorBrush x:Key="BrushText"        Color="#1F2937"/>
-    <SolidColorBrush x:Key="BrushTextMuted"   Color="#6B7280"/>
-    <SolidColorBrush x:Key="BrushTextFaint"   Color="#9CA3AF"/>
-    <SolidColorBrush x:Key="BrushAccent"      Color="#219AF9"/>
-    <SolidColorBrush x:Key="BrushAccentHover" Color="#1C87DB"/>
+    <SolidColorBrush x:Key="BrushSurfaceAlt"  Color="#F7F7FB"/>
+    <SolidColorBrush x:Key="BrushBorder"      Color="#E7E7F0"/>
+    <SolidColorBrush x:Key="BrushText"        Color="#1B1C29"/>
+    <SolidColorBrush x:Key="BrushTextMuted"   Color="#6B6F82"/>
+    <SolidColorBrush x:Key="BrushTextFaint"   Color="#9296A8"/>
+    <SolidColorBrush x:Key="BrushAccent"      Color="#7C6FFA"/>
+    <SolidColorBrush x:Key="BrushAccentHover" Color="#6C5CE7"/>
     <SolidColorBrush x:Key="BrushSuccess"     Color="#16A34A"/>
     <SolidColorBrush x:Key="BrushDanger"      Color="#DC2626"/>
     <SolidColorBrush x:Key="BrushWarning"     Color="#D97706"/>
     <SolidColorBrush x:Key="BrushTopBarBg"    Color="#FFFFFF"/>
     <SolidColorBrush x:Key="BrushStatusBarBg" Color="#FFFFFF"/>
-    <SolidColorBrush x:Key="BrushHover"       Color="#F3F4F6"/>
-    <SolidColorBrush x:Key="BrushActiveNav"   Color="#EFF6FF"/>
-    <SolidColorBrush x:Key="BrushInputBg"     Color="#F9FAFB"/>
-    <SolidColorBrush x:Key="BrushInputBorder" Color="#D1D5DB"/>
+    <SolidColorBrush x:Key="BrushHover"       Color="#F5F5F9"/>
+    <SolidColorBrush x:Key="BrushActiveNav"   Color="#EEEBFF"/>
+    <SolidColorBrush x:Key="BrushInputBg"     Color="#F7F7FB"/>
+    <SolidColorBrush x:Key="BrushInputBorder" Color="#DCDCE6"/>
 </ResourceDictionary>
 '@
     }
     return @'
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <SolidColorBrush x:Key="BrushWindowBg"    Color="#18181B"/>
-    <SolidColorBrush x:Key="BrushSidebarBg"   Color="#1C1C1E"/>
-    <SolidColorBrush x:Key="BrushSidebarBrd"  Color="#2A2A2A"/>
-    <SolidColorBrush x:Key="BrushSurface"     Color="#232326"/>
-    <SolidColorBrush x:Key="BrushSurfaceAlt"  Color="#1E1E1E"/>
-    <SolidColorBrush x:Key="BrushBorder"      Color="#3F3F46"/>
-    <SolidColorBrush x:Key="BrushText"        Color="#F4F4F5"/>
-    <SolidColorBrush x:Key="BrushTextMuted"   Color="#9CA3AF"/>
-    <SolidColorBrush x:Key="BrushTextFaint"   Color="#6B7280"/>
-    <SolidColorBrush x:Key="BrushAccent"      Color="#219AF9"/>
-    <SolidColorBrush x:Key="BrushAccentHover" Color="#3FADFB"/>
-    <SolidColorBrush x:Key="BrushSuccess"     Color="#16A34A"/>
+    <SolidColorBrush x:Key="BrushWindowBg"    Color="#0A0A0F"/>
+    <SolidColorBrush x:Key="BrushSidebarBg"   Color="#0D0E14"/>
+    <SolidColorBrush x:Key="BrushSidebarBrd"  Color="#1E1F2E"/>
+    <SolidColorBrush x:Key="BrushSurface"     Color="#14151F"/>
+    <SolidColorBrush x:Key="BrushSurfaceAlt"  Color="#0F1017"/>
+    <SolidColorBrush x:Key="BrushBorder"      Color="#23242F"/>
+    <SolidColorBrush x:Key="BrushText"        Color="#F4F4F6"/>
+    <SolidColorBrush x:Key="BrushTextMuted"   Color="#9296A8"/>
+    <SolidColorBrush x:Key="BrushTextFaint"   Color="#6B6F82"/>
+    <SolidColorBrush x:Key="BrushAccent"      Color="#7C6FFA"/>
+    <SolidColorBrush x:Key="BrushAccentHover" Color="#8F84FF"/>
+    <SolidColorBrush x:Key="BrushSuccess"     Color="#22C55E"/>
     <SolidColorBrush x:Key="BrushDanger"      Color="#EF4444"/>
     <SolidColorBrush x:Key="BrushWarning"     Color="#F59E0B"/>
-    <SolidColorBrush x:Key="BrushTopBarBg"    Color="#1C1C1E"/>
-    <SolidColorBrush x:Key="BrushStatusBarBg" Color="#1C1C1E"/>
-    <SolidColorBrush x:Key="BrushHover"       Color="#2A2A2E"/>
-    <SolidColorBrush x:Key="BrushActiveNav"   Color="#26262A"/>
-    <SolidColorBrush x:Key="BrushInputBg"     Color="#1E1E1E"/>
-    <SolidColorBrush x:Key="BrushInputBorder" Color="#3F3F46"/>
+    <SolidColorBrush x:Key="BrushTopBarBg"    Color="#0D0E14"/>
+    <SolidColorBrush x:Key="BrushStatusBarBg" Color="#0D0E14"/>
+    <SolidColorBrush x:Key="BrushHover"       Color="#1A1B26"/>
+    <SolidColorBrush x:Key="BrushActiveNav"   Color="#1E1D33"/>
+    <SolidColorBrush x:Key="BrushInputBg"     Color="#0F1017"/>
+    <SolidColorBrush x:Key="BrushInputBorder" Color="#23242F"/>
 </ResourceDictionary>
 '@
 }
@@ -1903,19 +1903,20 @@ $script:XamlHead = @'
             <Setter Property="Margin" Value="22,18,0,6"/>
         </Style>
         <Style x:Key="SidebarButton" TargetType="Button">
-            <Setter Property="Height" Value="42"/>
-            <Setter Property="Margin" Value="0,0,0,3"/>
+            <Setter Property="Height" Value="40"/>
+            <Setter Property="Margin" Value="12,0,12,3"/>
             <Setter Property="Foreground" Value="{DynamicResource BrushTextMuted}"/>
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontSize" Value="13.5"/>
+            <Setter Property="FontWeight" Value="Medium"/>
             <Setter Property="HorizontalContentAlignment" Value="Left"/>
-            <Setter Property="Padding" Value="22,0,0,0"/>
+            <Setter Property="Padding" Value="14,0,0,0"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{DynamicResource BrushAccent}" BorderThickness="{TemplateBinding Tag}">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="8">
                             <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
                         </Border>
                         <ControlTemplate.Triggers>
@@ -1989,9 +1990,10 @@ $script:XamlHead = @'
             </Setter>
         </Style>
         <Style x:Key="ShortcutCardButton" TargetType="Button">
-            <Setter Property="Height" Value="92"/>
+            <Setter Property="Height" Value="150"/>
             <Setter Property="Margin" Value="0,0,12,12"/>
-            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="VerticalContentAlignment" Value="Stretch"/>
             <Setter Property="Padding" Value="18"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="BorderThickness" Value="1"/>
@@ -2000,8 +2002,8 @@ $script:XamlHead = @'
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8">
-                            <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="10">
+                            <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="{TemplateBinding Padding}"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
@@ -2016,7 +2018,7 @@ $script:XamlHead = @'
             <Setter Property="Background" Value="{DynamicResource BrushSurface}"/>
             <Setter Property="BorderBrush" Value="{DynamicResource BrushBorder}"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="CornerRadius" Value="10"/>
             <Setter Property="Padding" Value="16,12"/>
             <Setter Property="Margin" Value="0,0,12,12"/>
         </Style>
@@ -2024,7 +2026,7 @@ $script:XamlHead = @'
             <Setter Property="Background" Value="{DynamicResource BrushSurface}"/>
             <Setter Property="BorderBrush" Value="{DynamicResource BrushBorder}"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="CornerRadius" Value="10"/>
             <Setter Property="Padding" Value="16"/>
             <Setter Property="Margin" Value="0,0,0,10"/>
         </Style>
@@ -2076,21 +2078,15 @@ $script:XamlHead = @'
                 </StackPanel>
                 <ScrollViewer DockPanel.Dock="Top" VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="0,4,0,0">
-                        <TextBlock Text="INICIO" Style="{StaticResource NavGroupLabel}" Margin="22,4,0,6"/>
-                        <Button x:Name="NavInicio" Content="Inicio" Style="{StaticResource SidebarButton}" Background="{DynamicResource BrushActiveNav}" Foreground="{DynamicResource BrushText}" Tag="3,0,0,0"/>
-                        <Button x:Name="NavChecklist" Content="Checklist" Style="{StaticResource SidebarButton}" Tag="0"/>
-                        <TextBlock Text="APLICATIVOS" Style="{StaticResource NavGroupLabel}"/>
-                        <Button x:Name="NavInstalar"  Content="Instalar Aplicativos" Style="{StaticResource SidebarButton}" Tag="0"/>
-                        <Button x:Name="NavExtra"     Content="Pacote Extra"        Style="{StaticResource SidebarButton}" Tag="0"/>
-                        <TextBlock Text="SISTEMA" Style="{StaticResource NavGroupLabel}"/>
-                        <Button x:Name="NavLimpeza"   Content="Limpeza"             Style="{StaticResource SidebarButton}" Tag="0"/>
-                        <Button x:Name="NavRede"      Content="Rede"                Style="{StaticResource SidebarButton}" Tag="0"/>
+                        <TextBlock Text="PRINCIPAL" Style="{StaticResource NavGroupLabel}" Margin="22,4,0,6"/>
+                        <Button x:Name="NavInicio" Content="Inicio" Style="{StaticResource SidebarButton}" Background="{DynamicResource BrushActiveNav}" Foreground="{DynamicResource BrushAccent}" FontWeight="Bold"/>
+                        <Button x:Name="NavChecklist" Content="Checklist" Style="{StaticResource SidebarButton}"/>
+                        <Button x:Name="NavInstalar"  Content="Instalar Aplicativos" Style="{StaticResource SidebarButton}"/>
                         <TextBlock Text="IMPRESSAO" Style="{StaticResource NavGroupLabel}"/>
-                        <Button x:Name="NavImpressao" Content="Impressao"           Style="{StaticResource SidebarButton}" Tag="0"/>
-                        <TextBlock Text="AVANCADO" Style="{StaticResource NavGroupLabel}"/>
-                        <Button x:Name="NavFerramentas" Content="Ferramentas"       Style="{StaticResource SidebarButton}" Tag="0"/>
-                        <TextBlock Text="DIAGNOSTICO" Style="{StaticResource NavGroupLabel}"/>
-                        <Button x:Name="NavLogs"      Content="Logs"                Style="{StaticResource SidebarButton}" Tag="0"/>
+                        <Button x:Name="NavImpressao" Content="Impressao"           Style="{StaticResource SidebarButton}"/>
+                        <TextBlock Text="SISTEMA" Style="{StaticResource NavGroupLabel}"/>
+                        <Button x:Name="NavFerramentas" Content="Ferramentas"       Style="{StaticResource SidebarButton}"/>
+                        <Button x:Name="NavLogs"      Content="Logs"                Style="{StaticResource SidebarButton}"/>
                     </StackPanel>
                 </ScrollViewer>
             </DockPanel>
@@ -2210,127 +2206,66 @@ $script:XamlPanelsA = @'
                     </ScrollViewer>
                 </Grid>
 
-                <!-- Instalar Aplicativos -->
+                <!-- Instalar Aplicativos (inclui Pacote Extra) -->
                 <Grid x:Name="PanelInstalar">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/><RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <TextBlock Grid.Row="0" Text="Instalar Aplicativos" Foreground="{DynamicResource BrushText}" FontSize="22" FontWeight="Bold" Margin="0,0,0,14"/>
 
-                    <Border Grid.Row="1" Style="{StaticResource Card}">
+                    <ScrollViewer Grid.Row="1">
                         <StackPanel>
-                            <TextBlock Text="GERENCIADORES DE PACOTE" Foreground="{DynamicResource BrushTextFaint}" FontSize="11" FontWeight="Bold" Margin="0,0,0,10"/>
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                <TextBlock x:Name="TxtWingetStatus" Text="Winget: verificando..." Foreground="{DynamicResource BrushText}" FontSize="13" VerticalAlignment="Center" Width="260"/>
-                                <Button x:Name="BtnInstalarWinget" Content="Instalar Winget" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Width="150" Height="30" Margin="0,0,8,0"/>
-                                <Button x:Name="BtnRepararWinget" Content="Reparar Winget" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" Width="150" Height="30"/>
-                            </StackPanel>
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock x:Name="TxtChocoStatus" Text="Chocolatey: verificando..." Foreground="{DynamicResource BrushText}" FontSize="13" VerticalAlignment="Center" Width="260"/>
-                                <Button x:Name="BtnInstalarChoco" Content="Instalar Chocolatey" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Width="150" Height="30"/>
-                            </StackPanel>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="GERENCIADORES DE PACOTE" Foreground="{DynamicResource BrushTextFaint}" FontSize="11" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <TextBlock x:Name="TxtWingetStatus" Text="Winget: verificando..." Foreground="{DynamicResource BrushText}" FontSize="13" VerticalAlignment="Center" Width="260"/>
+                                        <Button x:Name="BtnInstalarWinget" Content="Instalar Winget" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Width="150" Height="30" Margin="0,0,8,0"/>
+                                        <Button x:Name="BtnRepararWinget" Content="Reparar Winget" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" Width="150" Height="30"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock x:Name="TxtChocoStatus" Text="Chocolatey: verificando..." Foreground="{DynamicResource BrushText}" FontSize="13" VerticalAlignment="Center" Width="260"/>
+                                        <Button x:Name="BtnInstalarChoco" Content="Instalar Chocolatey" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Width="150" Height="30"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="BUSCAR OUTRO SOFTWARE (WINGET / CHOCOLATEY)" Foreground="{DynamicResource BrushTextFaint}" FontSize="11" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBox x:Name="TxtBuscaOnline" Style="{StaticResource SearchBox}" Width="360" Margin="0,0,10,0"/>
+                                        <Button x:Name="BtnBuscarOnline" Content="Buscar" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Width="110" Height="36"/>
+                                    </StackPanel>
+                                    <StackPanel x:Name="SpBuscaResultados" Margin="0,10,0,0"/>
+                                    <Button x:Name="BtnInstalarBusca" Content="Instalar Selecionados da Busca" Style="{StaticResource CardButton}" Background="{DynamicResource BrushSuccess}" Width="240" HorizontalAlignment="Left" Margin="0,10,0,0" Visibility="Collapsed"/>
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Text="LISTA PADRAO" Foreground="{DynamicResource BrushTextFaint}" FontSize="11" FontWeight="Bold" Margin="4,6,0,10"/>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBox x:Name="TxtFiltroApps" Style="{StaticResource SearchBox}" Text="Pesquisar na lista padrao..." Foreground="{DynamicResource BrushTextMuted}" Margin="0,0,0,10"/>
+                                    <StackPanel x:Name="SpAppsList"/>
+                                    <Button x:Name="BtnInstalarSelecionados" Content="Instalar Selecionados" Width="220" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Margin="0,10,0,0"/>
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Text="PACOTE EXTRA" Foreground="{DynamicResource BrushTextFaint}" FontSize="11" FontWeight="Bold" Margin="4,6,0,10"/>
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,20">
+                                <StackPanel>
+                                    <TextBlock Text="Instaladores diretos hospedados fora do winget/choco (Bitdefender, FortiClient, EasyELGIN, etc.)." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                                    <StackPanel x:Name="SpExtraList"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <Button x:Name="BtnAdicionarExtra" Content="Adicionar" Width="140" Style="{StaticResource CardButton}" Background="{DynamicResource BrushSuccess}" Margin="0,0,10,0"/>
+                                        <Button x:Name="BtnInstalarExtra" Content="Instalar Selecionados" Width="220" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
-                    </Border>
-
-                    <Border Grid.Row="2" Style="{StaticResource Card}">
-                        <StackPanel>
-                            <TextBlock Text="BUSCAR OUTRO SOFTWARE (WINGET / CHOCOLATEY)" Foreground="{DynamicResource BrushTextFaint}" FontSize="11" FontWeight="Bold" Margin="0,0,0,10"/>
-                            <StackPanel Orientation="Horizontal">
-                                <TextBox x:Name="TxtBuscaOnline" Style="{StaticResource SearchBox}" Width="360" Margin="0,0,10,0"/>
-                                <Button x:Name="BtnBuscarOnline" Content="Buscar" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Width="110" Height="36"/>
-                            </StackPanel>
-                            <StackPanel x:Name="SpBuscaResultados" Margin="0,10,0,0"/>
-                            <Button x:Name="BtnInstalarBusca" Content="Instalar Selecionados da Busca" Style="{StaticResource CardButton}" Background="{DynamicResource BrushSuccess}" Width="240" HorizontalAlignment="Left" Margin="0,10,0,0" Visibility="Collapsed"/>
-                        </StackPanel>
-                    </Border>
-
-                    <TextBox Grid.Row="3" x:Name="TxtFiltroApps" Style="{StaticResource SearchBox}" Text="Pesquisar na lista padrao..." Foreground="{DynamicResource BrushTextMuted}" Margin="0,0,0,10"/>
-
-                    <ScrollViewer Grid.Row="4"><StackPanel x:Name="SpAppsList"/></ScrollViewer>
-                    <Button Grid.Row="5" x:Name="BtnInstalarSelecionados" Content="Instalar Selecionados" Width="220" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Margin="0,14,0,0"/>
-                </Grid>
-
-                <!-- Pacote Extra -->
-                <Grid x:Name="PanelExtra" Visibility="Collapsed">
-                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0" Text="Pacote Extra" Foreground="{DynamicResource BrushText}" FontSize="22" FontWeight="Bold" Margin="0,0,0,14"/>
-                    <ScrollViewer Grid.Row="1"><StackPanel x:Name="SpExtraList"/></ScrollViewer>
-                    <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,14,0,0">
-                        <Button x:Name="BtnAdicionarExtra" Content="Adicionar" Width="140" Style="{StaticResource CardButton}" Background="{DynamicResource BrushSuccess}" Margin="0,0,10,0"/>
-                        <Button x:Name="BtnInstalarExtra" Content="Instalar Selecionados" Width="220" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
-                    </StackPanel>
+                    </ScrollViewer>
                 </Grid>
 '@
 
 $script:XamlPanelsB = @'
-                <!-- Limpeza -->
-                <StackPanel x:Name="PanelLimpeza" Visibility="Collapsed">
-                    <TextBlock Text="Limpeza" Foreground="{DynamicResource BrushText}" FontSize="22" FontWeight="Bold" Margin="0,0,0,14"/>
-                    <Border Style="{StaticResource Card}">
-                        <StackPanel>
-                            <TextBlock Text="Arquivos temporarios" Foreground="{DynamicResource BrushText}" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                            <TextBlock Text="Limpa a pasta TEMP do usuario e, se administrador, a pasta TEMP do Windows." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,10" TextWrapping="Wrap"/>
-                            <Button x:Name="BtnLimparTemp" Content="Limpar Arquivos Temporarios" Width="280" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
-                        </StackPanel>
-                    </Border>
-                    <Border Style="{StaticResource Card}">
-                        <StackPanel>
-                            <TextBlock Text="Cache do Windows Update" Foreground="{DynamicResource BrushText}" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                            <TextBlock Text="Para wuauserv/bits, limpa SoftwareDistribution\Download e reinicia os servicos. Requer Administrador." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,10" TextWrapping="Wrap"/>
-                            <Button x:Name="BtnLimparWU" Content="Limpar Cache do Windows Update" Width="280" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
-                        </StackPanel>
-                    </Border>
-                    <Border Style="{StaticResource Card}">
-                        <StackPanel>
-                            <TextBlock Text="Cache de geolocalizacao" Foreground="{DynamicResource BrushText}" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                            <TextBlock Text="Limpa o cache de localizacao do Windows e reinicia o servico lfsvc. Requer Administrador." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,10" TextWrapping="Wrap"/>
-                            <Button x:Name="BtnLimparGeo" Content="Limpar Cache de Geolocalizacao" Width="280" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
-                        </StackPanel>
-                    </Border>
-                </StackPanel>
-
-                <!-- Rede -->
-                <StackPanel x:Name="PanelRede" Visibility="Collapsed">
-                    <TextBlock Text="Ferramentas de Rede" Foreground="{DynamicResource BrushText}" FontSize="22" FontWeight="Bold" Margin="0,0,0,14"/>
-                    <Border Style="{StaticResource Card}">
-                        <StackPanel>
-                            <TextBlock Text="Flush DNS" Foreground="{DynamicResource BrushText}" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                            <TextBlock Text="Limpa o cache de resolucao DNS local." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,10"/>
-                            <Button x:Name="BtnFlushDns" Content="Flush DNS" Width="220" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
-                        </StackPanel>
-                    </Border>
-                    <Border Style="{StaticResource Card}">
-                        <StackPanel>
-                            <TextBlock Text="Renovar IP" Foreground="{DynamicResource BrushText}" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                            <TextBlock Text="Libera e renova o endereco IP da conexao ativa. Requer Administrador." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,10"/>
-                            <Button x:Name="BtnRenewIp" Content="Renew IP" Width="220" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
-                        </StackPanel>
-                    </Border>
-                    <Border Style="{StaticResource Card}">
-                        <StackPanel>
-                            <TextBlock Text="Reset Winsock" Foreground="{DynamicResource BrushText}" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                            <TextBlock Text="Reinicia o catalogo Winsock. Requer reiniciar o computador depois. Requer Administrador." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,10"/>
-                            <Button x:Name="BtnWinsock" Content="Reset Winsock" Width="220" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}"/>
-                        </StackPanel>
-                    </Border>
-                    <Border Style="{StaticResource Card}">
-                        <StackPanel>
-                            <TextBlock Text="Ping Google" Foreground="{DynamicResource BrushText}" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                            <TextBlock Text="Testa conectividade externa (8.8.8.8)." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,10"/>
-                            <Button x:Name="BtnPingGoogle" Content="Ping Google" Width="220" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
-                        </StackPanel>
-                    </Border>
-                    <Border Style="{StaticResource Card}">
-                        <StackPanel>
-                            <TextBlock Text="Teste DNS" Foreground="{DynamicResource BrushText}" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                            <TextBlock Text="Resolve google.com para checar o DNS configurado." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,10"/>
-                            <Button x:Name="BtnTesteDns" Content="Teste DNS" Width="220" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
-                        </StackPanel>
-                    </Border>
-                </StackPanel>
-
                 <!-- Impressao -->
                 <Grid x:Name="PanelImpressao" Visibility="Collapsed">
                     <Grid.RowDefinitions>
@@ -2879,11 +2814,11 @@ $script:XamlPanelsD = @'
                                 <StackPanel>
                                     <TextBlock Text="REDE" Foreground="{DynamicResource BrushAccent}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
                                     <UniformGrid Columns="3">
-                                        <Button x:Name="BtnFerrFlushDns" Content="Flush DNS" Height="36" Margin="0,0,6,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
-                                        <Button x:Name="BtnFerrRenewIp" Content="Renew IP" Height="36" Margin="0,0,6,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
-                                        <Button x:Name="BtnFerrWinsock" Content="Reset Winsock" Height="36" Margin="0,0,0,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
-                                        <Button x:Name="BtnFerrPing" Content="Ping Google" Height="36" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
-                                        <Button x:Name="BtnFerrDns" Content="Teste DNS" Height="36" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                        <Button x:Name="BtnFerrFlushDns" Content="Flush DNS" Height="36" Margin="0,0,6,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" ToolTip="Limpa o cache de resolucao DNS local."/>
+                                        <Button x:Name="BtnFerrRenewIp" Content="Renew IP" Height="36" Margin="0,0,6,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" ToolTip="Libera e renova o endereco IP da conexao ativa. Requer Administrador."/>
+                                        <Button x:Name="BtnFerrWinsock" Content="Reset Winsock" Height="36" Margin="0,0,0,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" ToolTip="Reinicia o catalogo Winsock. Requer reiniciar o computador depois. Requer Administrador."/>
+                                        <Button x:Name="BtnFerrPing" Content="Ping Google" Height="36" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" ToolTip="Testa conectividade externa (8.8.8.8)."/>
+                                        <Button x:Name="BtnFerrDns" Content="Teste DNS" Height="36" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" ToolTip="Resolve google.com para checar o DNS configurado."/>
                                     </UniformGrid>
                                 </StackPanel>
                             </Border>
@@ -3004,9 +2939,6 @@ function Show-MainWindow {
         Inicio    = $window.FindName("PanelInicio")
         Checklist = $window.FindName("PanelChecklist")
         Instalar  = $window.FindName("PanelInstalar")
-        Extra     = $window.FindName("PanelExtra")
-        Limpeza   = $window.FindName("PanelLimpeza")
-        Rede      = $window.FindName("PanelRede")
         Impressao = $window.FindName("PanelImpressao")
         Ferramentas = $window.FindName("PanelFerramentas")
         Logs      = $window.FindName("PanelLogs")
@@ -3015,16 +2947,13 @@ function Show-MainWindow {
         Inicio    = $window.FindName("NavInicio")
         Checklist = $window.FindName("NavChecklist")
         Instalar  = $window.FindName("NavInstalar")
-        Extra     = $window.FindName("NavExtra")
-        Limpeza   = $window.FindName("NavLimpeza")
-        Rede      = $window.FindName("NavRede")
         Impressao = $window.FindName("NavImpressao")
         Ferramentas = $window.FindName("NavFerramentas")
         Logs      = $window.FindName("NavLogs")
     }
     $panelTitles = @{
-        Inicio="Inicio"; Checklist="Checklist"; Instalar="Instalar Aplicativos"; Extra="Pacote Extra"; Limpeza="Limpeza"
-        Rede="Ferramentas de Rede"; Impressao="Impressao"; Ferramentas="Ferramentas"; Logs="Logs"
+        Inicio="Inicio"; Checklist="Checklist"; Instalar="Instalar Aplicativos"
+        Impressao="Impressao"; Ferramentas="Ferramentas"; Logs="Logs"
     }
     # Scriptblock (nao function aninhada) - funcoes definidas dentro de outra
     # funcao nao ficam visiveis de dentro de closures de eventos WPF (Add_Click),
@@ -3034,8 +2963,8 @@ function Show-MainWindow {
         foreach ($k in $panels.Keys) {
             $panels[$k].Visibility = if ($k -eq $Key) { "Visible" } else { "Collapsed" }
             $navButtons[$k].Background = if ($k -eq $Key) { Get-ThemeBrush "BrushActiveNav" } else { Get-Brush "Transparent" }
-            $navButtons[$k].Foreground = if ($k -eq $Key) { Get-ThemeBrush "BrushText" } else { Get-ThemeBrush "BrushTextMuted" }
-            $navButtons[$k].Tag = if ($k -eq $Key) { "3,0,0,0" } else { "0" }
+            $navButtons[$k].Foreground = if ($k -eq $Key) { Get-ThemeBrush "BrushAccent" } else { Get-ThemeBrush "BrushTextMuted" }
+            $navButtons[$k].FontWeight = if ($k -eq $Key) { "Bold" } else { "Medium" }
         }
         $global:CurrentSection = $Key
         $txtTitulo.Text = $panelTitles[$Key]
@@ -3056,31 +2985,71 @@ function Show-MainWindow {
 
     $gridAtalhos = $window.FindName("GridAtalhos")
     $homeShortcuts = @(
-        @{ Key="Checklist"; Title="Checklist";             Desc="Formatacao e configuracao passo a passo" }
-        @{ Key="Instalar";  Title="Instalar Aplicativos";  Desc="Lista padrao via winget/choco + busca de software" }
-        @{ Key="Extra";     Title="Pacote Extra";          Desc="Instaladores diretos (Bitdefender, FortiClient, etc.)" }
-        @{ Key="Limpeza";   Title="Limpeza";                Desc="Temporarios, Windows Update, geolocalizacao, IA do Windows" }
-        @{ Key="Rede";      Title="Rede";                   Desc="Flush DNS, renovar IP, reset winsock, testes de conectividade" }
-        @{ Key="Impressao"; Title="Impressao";              Desc="Spooler, monitor SNMP e gerenciamento de impressoras" }
-        @{ Key="Ferramentas"; Title="Ferramentas";          Desc="Reparos, desinstalador seguro, cache e rede avancada" }
-        @{ Key="Logs";      Title="Logs";                   Desc="Historico de acoes e erros da ferramenta" }
+        @{ Key="Checklist";   Title="Checklist";            Desc="Formatacao e configuracao passo a passo";                     Categoria="Setup";         Mono="CK"; Cor="#4C6FFF" }
+        @{ Key="Instalar";    Title="Instalar Aplicativos";  Desc="Lista padrao, busca winget/choco e Pacote Extra";             Categoria="Instalacao";    Mono="IN"; Cor="#22C55E" }
+        @{ Key="Impressao";   Title="Impressao";             Desc="Spooler, monitor SNMP e gerenciamento de impressoras";        Categoria="Equipamentos";  Mono="IP"; Cor="#7C6FFA" }
+        @{ Key="Ferramentas"; Title="Ferramentas";           Desc="Limpeza, rede, reparos, desinstalador seguro e mais";         Categoria="Avancado";      Mono="FR"; Cor="#EF4444" }
+        @{ Key="Logs";        Title="Logs";                  Desc="Historico de acoes e erros da ferramenta";                    Categoria="Historico";     Mono="LG"; Cor="#6B7280" }
     )
     foreach ($shortcut in $homeShortcuts) {
         $btn = New-Object System.Windows.Controls.Button
         $btn.Style = $window.FindResource("ShortcutCardButton")
-        $sp = New-Object System.Windows.Controls.StackPanel
+
+        $card = New-Object System.Windows.Controls.Grid
+        for ($i=0; $i -lt 4; $i++) { [void]$card.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition)) }
+        $card.RowDefinitions[0].Height = "Auto"; $card.RowDefinitions[1].Height = "Auto"
+        $card.RowDefinitions[2].Height = "Auto"; $card.RowDefinitions[3].Height = "Auto"
+
+        $headerRow = New-Object System.Windows.Controls.Grid
+        $headerRow.Margin = "0,0,0,10"
+        $c0 = New-Object System.Windows.Controls.ColumnDefinition; $c0.Width = "Auto"
+        $c1 = New-Object System.Windows.Controls.ColumnDefinition
+        [void]$headerRow.ColumnDefinitions.Add($c0); [void]$headerRow.ColumnDefinitions.Add($c1)
+
+        $iconBox = New-Object System.Windows.Controls.Border
+        $iconBox.Width = 40; $iconBox.Height = 40; $iconBox.CornerRadius = 9
+        $iconBox.Background = Get-Brush $shortcut.Cor
+        $iconTxt = New-Object System.Windows.Controls.TextBlock
+        $iconTxt.Text = $shortcut.Mono; $iconTxt.Foreground = "White"; $iconTxt.FontWeight = "Bold"; $iconTxt.FontSize = 12
+        $iconTxt.HorizontalAlignment = "Center"; $iconTxt.VerticalAlignment = "Center"
+        $iconBox.Child = $iconTxt
+        [System.Windows.Controls.Grid]::SetColumn($iconBox,0)
+        [void]$headerRow.Children.Add($iconBox)
+
+        $badge = New-Object System.Windows.Controls.Border
+        $badge.CornerRadius = 9; $badge.Padding = "9,3"; $badge.HorizontalAlignment = "Right"; $badge.VerticalAlignment = "Top"
+        $badge.Background = Get-Brush ("#26" + $shortcut.Cor.TrimStart('#'))
+        $badgeTxt = New-Object System.Windows.Controls.TextBlock
+        $badgeTxt.Text = $shortcut.Categoria; $badgeTxt.Foreground = Get-Brush $shortcut.Cor; $badgeTxt.FontSize = 10; $badgeTxt.FontWeight = "SemiBold"
+        $badge.Child = $badgeTxt
+        [System.Windows.Controls.Grid]::SetColumn($badge,1)
+        [void]$headerRow.Children.Add($badge)
+
+        [System.Windows.Controls.Grid]::SetRow($headerRow,0)
+        [void]$card.Children.Add($headerRow)
+
         $tTitle = New-Object System.Windows.Controls.TextBlock
         $tTitle.Text = $shortcut.Title
-        $tTitle.FontSize = 15; $tTitle.FontWeight = "Bold"
+        $tTitle.FontSize = 15; $tTitle.FontWeight = "Bold"; $tTitle.Margin = "0,0,0,4"
         $tTitle.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, "BrushText")
+        [System.Windows.Controls.Grid]::SetRow($tTitle,1)
+        [void]$card.Children.Add($tTitle)
+
         $tDesc = New-Object System.Windows.Controls.TextBlock
         $tDesc.Text = $shortcut.Desc
-        $tDesc.FontSize = 11
+        $tDesc.FontSize = 11; $tDesc.TextWrapping = "Wrap"; $tDesc.Margin = "0,0,0,10"
         $tDesc.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, "BrushTextMuted")
-        $tDesc.TextWrapping = "Wrap"; $tDesc.Margin = "0,4,0,0"
-        [void]$sp.Children.Add($tTitle)
-        [void]$sp.Children.Add($tDesc)
-        $btn.Content = $sp
+        [System.Windows.Controls.Grid]::SetRow($tDesc,2)
+        [void]$card.Children.Add($tDesc)
+
+        $tLink = New-Object System.Windows.Controls.TextBlock
+        $tLink.Text = "Acessar modulo ->"
+        $tLink.FontSize = 11; $tLink.FontWeight = "SemiBold"
+        $tLink.Foreground = Get-Brush $shortcut.Cor
+        [System.Windows.Controls.Grid]::SetRow($tLink,3)
+        [void]$card.Children.Add($tLink)
+
+        $btn.Content = $card
         $key = $shortcut.Key
         $btn.Add_Click({ & $ShowSection -Key $key }.GetNewClosure())
         [void]$gridAtalhos.Children.Add($btn)
@@ -3308,17 +3277,6 @@ function Show-MainWindow {
         Show-Info ("Instalacao concluida. Relatorio salvo em:`n{0}" -f $path)
     }.GetNewClosure())
 
-    # ---- Limpeza ----
-    $window.FindName("BtnLimparTemp").Add_Click({ Invoke-CleanupOperation -IncludeWindowsTemp; Show-Info "Temporarios limpos." }.GetNewClosure())
-    $window.FindName("BtnLimparWU").Add_Click({ Clear-WindowsUpdateCache }.GetNewClosure())
-    $window.FindName("BtnLimparGeo").Add_Click({ Clear-GeolocationCache }.GetNewClosure())
-
-    # ---- Rede ----
-    $window.FindName("BtnFlushDns").Add_Click({ Invoke-NetworkTool -Action "Flush DNS" }.GetNewClosure())
-    $window.FindName("BtnRenewIp").Add_Click({ Invoke-NetworkTool -Action "Renew IP" }.GetNewClosure())
-    $window.FindName("BtnWinsock").Add_Click({ Invoke-NetworkTool -Action "Reset Winsock" }.GetNewClosure())
-    $window.FindName("BtnPingGoogle").Add_Click({ Invoke-NetworkTool -Action "Ping Google" }.GetNewClosure())
-    $window.FindName("BtnTesteDns").Add_Click({ Invoke-NetworkTool -Action "Teste DNS" }.GetNewClosure())
 
     # ---- Impressao ----
     $window.FindName("BtnSpooler").Add_Click({ Reset-PrintSpooler }.GetNewClosure())
