@@ -34,7 +34,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.0"
+$global:AppVersion    = "3.1"
 $global:SchemaVersion = 1
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
@@ -1903,20 +1903,20 @@ $script:XamlHead = @'
             <Setter Property="Margin" Value="22,18,0,6"/>
         </Style>
         <Style x:Key="SidebarButton" TargetType="Button">
-            <Setter Property="Height" Value="40"/>
+            <Setter Property="Height" Value="42"/>
             <Setter Property="Margin" Value="12,0,12,3"/>
             <Setter Property="Foreground" Value="{DynamicResource BrushTextMuted}"/>
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="FontSize" Value="13.5"/>
+            <Setter Property="FontSize" Value="13"/>
             <Setter Property="FontWeight" Value="Medium"/>
             <Setter Property="HorizontalContentAlignment" Value="Left"/>
-            <Setter Property="Padding" Value="14,0,0,0"/>
+            <Setter Property="Padding" Value="10,0,10,0"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="8">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="9">
                             <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
                         </Border>
                         <ControlTemplate.Triggers>
@@ -1925,6 +1925,24 @@ $script:XamlHead = @'
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+        </Style>
+        <Style x:Key="SidebarNavIcon" TargetType="Border">
+            <Setter Property="Width" Value="26"/>
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="CornerRadius" Value="7"/>
+            <Setter Property="Margin" Value="0,0,10,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="SidebarNavIconText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="SidebarNavLabel" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
         </Style>
         <Style x:Key="CardButton" TargetType="Button">
             <Setter Property="Height" Value="40"/>
@@ -2064,7 +2082,7 @@ $script:XamlHead = @'
 
     <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="230"/>
+            <ColumnDefinition Width="258"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
@@ -2076,17 +2094,84 @@ $script:XamlHead = @'
                     <TextBlock Text="Service Desk Tool" Foreground="{DynamicResource BrushTextMuted}" FontSize="12"/>
                     <TextBlock x:Name="TxtVersaoSidebar" Text="" Foreground="{DynamicResource BrushTextFaint}" FontSize="10" Margin="0,4,0,0"/>
                 </StackPanel>
+                <Border DockPanel.Dock="Top" Height="1" Background="{DynamicResource BrushSidebarBrd}" Margin="22,0,22,12"/>
                 <ScrollViewer DockPanel.Dock="Top" VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="0,4,0,0">
                         <TextBlock Text="PRINCIPAL" Style="{StaticResource NavGroupLabel}" Margin="22,4,0,6"/>
-                        <Button x:Name="NavInicio" Content="Inicio" Style="{StaticResource SidebarButton}" Background="{DynamicResource BrushActiveNav}" Foreground="{DynamicResource BrushAccent}" FontWeight="Bold"/>
-                        <Button x:Name="NavChecklist" Content="Checklist" Style="{StaticResource SidebarButton}"/>
-                        <Button x:Name="NavInstalar"  Content="Instalar Aplicativos" Style="{StaticResource SidebarButton}"/>
+                        <Button x:Name="NavInicio" Style="{StaticResource SidebarButton}" Background="{DynamicResource BrushActiveNav}" Foreground="{DynamicResource BrushAccent}" FontWeight="Bold">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource SidebarNavIcon}" Background="#06B6D4">
+                                    <TextBlock Text="HM" Style="{StaticResource SidebarNavIconText}"/>
+                                </Border>
+                                <TextBlock Grid.Column="1" Text="Inicio" Style="{StaticResource SidebarNavLabel}"/>
+                            </Grid>
+                        </Button>
+                        <Button x:Name="NavChecklist" Style="{StaticResource SidebarButton}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource SidebarNavIcon}" Background="#4C6FFF">
+                                    <TextBlock Text="CK" Style="{StaticResource SidebarNavIconText}"/>
+                                </Border>
+                                <TextBlock Grid.Column="1" Text="Checklist" Style="{StaticResource SidebarNavLabel}"/>
+                            </Grid>
+                        </Button>
+                        <Button x:Name="NavInstalar" Style="{StaticResource SidebarButton}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource SidebarNavIcon}" Background="#22C55E">
+                                    <TextBlock Text="IN" Style="{StaticResource SidebarNavIconText}"/>
+                                </Border>
+                                <TextBlock Grid.Column="1" Text="Instalar Aplicativos" Style="{StaticResource SidebarNavLabel}"/>
+                            </Grid>
+                        </Button>
                         <TextBlock Text="IMPRESSAO" Style="{StaticResource NavGroupLabel}"/>
-                        <Button x:Name="NavImpressao" Content="Impressao"           Style="{StaticResource SidebarButton}"/>
+                        <Button x:Name="NavImpressao" Style="{StaticResource SidebarButton}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource SidebarNavIcon}" Background="#7C6FFA">
+                                    <TextBlock Text="IP" Style="{StaticResource SidebarNavIconText}"/>
+                                </Border>
+                                <TextBlock Grid.Column="1" Text="Impressao" Style="{StaticResource SidebarNavLabel}"/>
+                            </Grid>
+                        </Button>
                         <TextBlock Text="SISTEMA" Style="{StaticResource NavGroupLabel}"/>
-                        <Button x:Name="NavFerramentas" Content="Ferramentas"       Style="{StaticResource SidebarButton}"/>
-                        <Button x:Name="NavLogs"      Content="Logs"                Style="{StaticResource SidebarButton}"/>
+                        <Button x:Name="NavFerramentas" Style="{StaticResource SidebarButton}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource SidebarNavIcon}" Background="#EF4444">
+                                    <TextBlock Text="FR" Style="{StaticResource SidebarNavIconText}"/>
+                                </Border>
+                                <TextBlock Grid.Column="1" Text="Ferramentas" Style="{StaticResource SidebarNavLabel}"/>
+                            </Grid>
+                        </Button>
+                        <Button x:Name="NavLogs" Style="{StaticResource SidebarButton}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource SidebarNavIcon}" Background="#6B7280">
+                                    <TextBlock Text="LG" Style="{StaticResource SidebarNavIconText}"/>
+                                </Border>
+                                <TextBlock Grid.Column="1" Text="Logs" Style="{StaticResource SidebarNavLabel}"/>
+                            </Grid>
+                        </Button>
                     </StackPanel>
                 </ScrollViewer>
             </DockPanel>
