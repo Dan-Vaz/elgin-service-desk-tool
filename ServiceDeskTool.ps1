@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.2"
+$global:AppVersion    = "3.3"
 $global:SchemaVersion = 1
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
@@ -351,6 +351,114 @@ function Invoke-ManagedProcess {
     } finally {
         if ($proc -ne $null) { try { $proc.Dispose() } catch {} }
     }
+}
+
+# Espera um processo terminar SEM travar a janela principal e sem precisar
+# de runspace/thread separada (ver notas do projeto: uma chamada nativa
+# bloqueante presa numa runspace nao pode ser interrompida de forma
+# confiavel, so um processo filho de verdade pode - aqui so esperamos ele).
+# Mostra o overlay de "carregando" via ShowDialog (nao Show): um dialogo
+# modal com Owner definido automaticamente desabilita a janela principal
+# e bombeia a fila de mensagens da UI sozinho enquanto espera, entao a
+# janela nao fica "Nao Responde" e nao precisa de pump manual.
+# $state e um Hashtable (nao uma variavel escalar) de proposito: dentro do
+# Add_Tick (.GetNewClosure()) reatribuir uma variavel local nao propaga de
+# volta pro escopo de fora (mesma armadilha documentada de variaveis locais
+# dentro de closures), mas MUTAR uma propriedade de um objeto capturado
+# funciona porque a referencia ao objeto e a mesma.
+function Wait-ProcessResponsive {
+    param([Parameter(Mandatory=$true)]$Process,[int]$TimeoutSeconds=1800,[string]$BusyText="Executando...")
+    $overlay = $null
+    try {
+        $overlayReader = [System.Xml.XmlNodeReader]::new([xml]$global:LoadingOverlayXaml)
+        $overlay = [System.Windows.Markup.XamlReader]::Load($overlayReader)
+        $overlay.Owner = $global:MainWindow
+        Set-DialogTheme -Dialog $overlay
+        $overlay.FindName("TxtLoadingStatus").Text = $BusyText
+    } catch { $overlay = $null }
+
+    $state = @{ TimedOut = $false }
+    if ($overlay -ne $null) {
+        $start = Get-Date
+        $timer = New-Object System.Windows.Threading.DispatcherTimer
+        $timer.Interval = [TimeSpan]::FromMilliseconds(300)
+        $timer.Add_Tick({
+            if ($Process.HasExited) {
+                $timer.Stop(); $overlay.Close()
+            } elseif ($TimeoutSeconds -gt 0 -and ((Get-Date) - $start).TotalSeconds -gt $TimeoutSeconds) {
+                $timer.Stop()
+                try { $Process.Kill() } catch {}
+                $state.TimedOut = $true
+                $overlay.Close()
+            }
+        }.GetNewClosure())
+        $timer.Start()
+        [void]$overlay.ShowDialog()
+    } else {
+        # Overlay falhou ao carregar - ainda assim nao trava: pump manual
+        # da fila de mensagens da UI entre cada verificacao.
+        $start = Get-Date
+        while (-not $Process.HasExited) {
+            Start-Sleep -Milliseconds 200
+            if ($global:MainWindow -ne $null) { $global:MainWindow.Dispatcher.Invoke([System.Action]{}, [System.Windows.Threading.DispatcherPriority]::Background) }
+            if ($TimeoutSeconds -gt 0 -and ((Get-Date) - $start).TotalSeconds -gt $TimeoutSeconds) {
+                try { $Process.Kill() } catch {}
+                $state.TimedOut = $true
+                break
+            }
+        }
+    }
+    if (-not $Process.HasExited) { try { $Process.WaitForExit(2000) } catch {} }
+    return [bool]$state.TimedOut
+}
+
+# Roda um comando num console DE VERDADE, visivel (nao oculto/redirecionado)
+# - o usuario ve o progresso nativo (ex.: percentual do SFC) em vez de so um
+# overlay generico. Sem captura de output (uma janela visivel nao pode ser
+# lida como texto sem redirecionar, o que esconderia a janela de novo) -
+# quem chamar depende so do ExitCode. A janela fica alguns segundos aberta
+# no final (timeout /t) pra dar tempo de ler a ultima mensagem antes de
+# fechar sozinha.
+function Invoke-VisibleConsoleCommand {
+    param([Parameter(Mandatory=$true)][string]$CommandLine,[string]$Description="Comando",[int]$TimeoutSeconds=1800,[string]$BusyText="Executando...")
+    Write-Log -Message ("{0}: {1}" -f $Description,$CommandLine)
+    $proc = $null
+    try {
+        $quote = [char]34
+        # set captura o ERRORLEVEL do comando original ANTES dos comandos
+        # decorativos do final (senao o codigo de saida devolvido seria o do
+        # 'timeout' cosmetico, nao o do comando que o usuario pediu) - e
+        # "exit /b" no final reaplica esse valor como saida do cmd.exe
+        # inteiro. Usa !VAR! (expansao adiada, ligada via /V:ON) em vez de
+        # %VAR% porque numa linha /c unica o cmd.exe expande todo %VAR%
+        # de uma vez, ANTES de qualquer comando da cadeia rodar - "%ELGIN_EL%"
+        # ficaria vazio mesmo depois do "set" (testado e confirmado). Caminho
+        # completo do timeout.exe (nao so "timeout") pra nao depender da
+        # ordem do PATH.
+        $tail  = " & set ELGIN_EL=!ERRORLEVEL! & echo. & echo ============================== & echo Concluido - esta janela fecha sozinha em alguns segundos... & "+$quote+(Join-Path $env:WINDIR "System32\timeout.exe")+$quote+" /t 5 /nobreak>nul & exit /b !ELGIN_EL!"
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName        = $env:ComSpec
+        $psi.Arguments       = "/d /s /v:on /c "+$quote+$CommandLine+$tail+$quote
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow  = $false
+        $psi.WindowStyle     = [System.Diagnostics.ProcessWindowStyle]::Normal
+        $proc = New-Object System.Diagnostics.Process
+        $proc.StartInfo = $psi
+        [void]$proc.Start()
+    } catch {
+        Write-Log -Message ("Falha em {0}: {1}" -f $Description,$_.Exception.Message) -Level "ERROR"
+        return [PSCustomObject]@{ExitCode=-1;Error=$_.Exception.Message;TimedOut=$false}
+    }
+    try {
+        $timedOut = Wait-ProcessResponsive -Process $proc -TimeoutSeconds $TimeoutSeconds -BusyText $BusyText
+        $exit = try { $proc.ExitCode } catch { -1 }
+        if ($timedOut) {
+            Write-Log -Message ("{0}: timeout apos {1}s" -f $Description,$TimeoutSeconds) -Level "ERROR"
+            return [PSCustomObject]@{ExitCode=-999;Error=("Timeout apos {0}s" -f $TimeoutSeconds);TimedOut=$true}
+        }
+        Write-Log -Message ("{0}: concluido, codigo de saida {1}" -f $Description,$exit) -Level "SUCCESS"
+        return [PSCustomObject]@{ExitCode=$exit;Error="";TimedOut=$false}
+    } finally { if ($proc -ne $null) { try { $proc.Dispose() } catch {} } }
 }
 
 function Invoke-ConsoleCommand {
@@ -2524,18 +2632,49 @@ function Clear-RecycleBinContents {
 }
 
 # ---- REPAROS ----
+function Show-ProcessResultInfo {
+    param([Parameter(Mandatory=$true)]$Result,[string]$Titulo="Operacao")
+    if ($Result.TimedOut) { Show-Warning ("{0}: tempo esgotado. O processo foi encerrado." -f $Titulo); return }
+    if ($Result.ExitCode -eq 0) { Show-Info ("{0} concluido com sucesso." -f $Titulo) }
+    else { Show-Warning ("{0} finalizado com codigo de saida {1}. Confira a janela que abriu para detalhes." -f $Titulo,$Result.ExitCode) }
+}
+
 function Invoke-SfcScan {
     if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
     Set-Status "Executando SFC /scannow - isso pode levar varios minutos..."
-    $r = Invoke-ConsoleCommand "sfc /scannow" "[REPAIR] SFC /scannow" 1800
-    Show-TextResultDialog -Title "Resultado - SFC /scannow" -Text $r.Output
+    $r = Invoke-VisibleConsoleCommand "sfc /scannow" "[REPAIR] SFC /scannow" 1800 "Executando SFC /scannow - isso pode levar varios minutos..."
+    Show-ProcessResultInfo -Result $r -Titulo "SFC /scannow"
 }
 
 function Invoke-DismRestoreHealth {
     if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
     Set-Status "Executando DISM RestoreHealth - isso pode levar varios minutos..."
-    $r = Invoke-ConsoleCommand "DISM /Online /Cleanup-Image /RestoreHealth" "[REPAIR] DISM RestoreHealth" 1800
-    Show-TextResultDialog -Title "Resultado - DISM RestoreHealth" -Text $r.Output
+    $r = Invoke-VisibleConsoleCommand "DISM /Online /Cleanup-Image /RestoreHealth" "[REPAIR] DISM RestoreHealth" 1800 "Executando DISM RestoreHealth - isso pode levar varios minutos..."
+    Show-ProcessResultInfo -Result $r -Titulo "DISM RestoreHealth"
+}
+
+# chkdsk /f no disco do sistema nao pode rodar com o volume em uso - o
+# Windows so oferece agendar a checagem completa pra proxima inicializacao,
+# respondendo "S"/"Y" (depende do idioma do Windows) a um prompt
+# interativo. Em vez de depender do idioma, usamos "fsutil dirty set" pra
+# marcar o volume como sujo diretamente - e exatamente o mesmo mecanismo
+# que aquele "sim" aciona (autochk roda no proximo boot), sem prompt e sem
+# depender de locale. A barra de progresso de verdade dessa checagem
+# acontece na tela de boot, antes do Windows carregar - fora do alcance de
+# qualquer overlay desta ferramenta, entao so confirmamos que ficou marcada.
+function Invoke-ChkdskScheduled {
+    param([string]$Drive = "C:")
+    if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
+    $msg = "Isso vai marcar o disco {0} para uma verificacao completa (chkdsk /f) na proxima vez que o computador for reiniciado.`n`nComo {0} esta em uso pelo Windows agora, a checagem so pode rodar durante o boot (antes do Windows carregar) - a barra de progresso real dela aparece na tela azul de inicializacao, nao dentro desta ferramenta.`n`nO computador precisa ser reiniciado para a verificacao realmente acontecer. Deseja continuar?" -f $Drive
+    if (-not (Confirm-Action $msg "Chkdsk /f - Agendar para o proximo boot")) { return }
+    Set-Status ("Agendando verificacao de disco em {0}..." -f $Drive)
+    $r = Invoke-VisibleConsoleCommand ("fsutil dirty set "+$Drive) ("[REPAIR] fsutil dirty set {0} (chkdsk agendado)" -f $Drive) 60 ("Agendando verificacao de disco em {0}..." -f $Drive)
+    if ($r.TimedOut) { Show-Warning "Chkdsk: tempo esgotado ao tentar agendar. Confira a janela do console."; return }
+    if ($r.ExitCode -eq 0) {
+        Show-Info ("Verificacao de {0} agendada. Ela vai rodar automaticamente na proxima vez que o computador for reiniciado." -f $Drive)
+    } else {
+        Show-Warning ("Nao foi possivel agendar a verificacao (codigo {0}). Confira a janela do console para detalhes." -f $r.ExitCode)
+    }
 }
 
 function Update-WingetApps {
@@ -2544,8 +2683,9 @@ function Update-WingetApps {
     if (-not $global:HasWinget) { Show-Warning "Winget nao esta instalado."; return }
     Set-Status "Atualizando aplicativos via winget..."
     $winget = Get-CommandPathSafe -Name "winget"
-    $r = Invoke-ManagedProcess -FilePath $winget -Arguments @("upgrade","--all","--silent","--accept-package-agreements","--accept-source-agreements","--disable-interactivity") -Description "[REPAIR] winget upgrade --all" -TimeoutSeconds 1800
-    Show-TextResultDialog -Title "Resultado - Atualizar Apps Winget" -Text $r.Output
+    $argLine = ConvertTo-ProcessArgumentString -Arguments @("upgrade","--all","--silent","--accept-package-agreements","--accept-source-agreements")
+    $r = Invoke-VisibleConsoleCommand ((([char]34)+$winget+([char]34))+" "+$argLine) "[REPAIR] winget upgrade --all" 1800 "Atualizando aplicativos via winget..."
+    Show-ProcessResultInfo -Result $r -Titulo "Atualizar Apps Winget"
 }
 
 # Ativa o plano de energia "Desempenho Maximo" (Ultimate Performance, oculto
@@ -2692,9 +2832,8 @@ function Get-ShadowCopiesInfo {
 function Invoke-DismComponentCleanup {
     if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
     Set-Status "Executando limpeza de componentes WinSxS - isso pode levar varios minutos..."
-    $ov = Show-BusyOverlay -Text "Executando limpeza de componentes WinSxS - isso pode levar varios minutos..."
-    try { $r = Invoke-ConsoleCommand "DISM /Online /Cleanup-Image /StartComponentCleanup" "[REPAIR] DISM StartComponentCleanup" 1800 } finally { Close-BusyOverlay -Overlay $ov }
-    Show-TextResultDialog -Title "Resultado - WinSxS / DISM Cleanup" -Text $r.Output
+    $r = Invoke-VisibleConsoleCommand "DISM /Online /Cleanup-Image /StartComponentCleanup" "[REPAIR] DISM StartComponentCleanup" 1800 "Executando limpeza de componentes WinSxS - isso pode levar varios minutos..."
+    Show-ProcessResultInfo -Result $r -Titulo "WinSxS / DISM Cleanup"
 }
 
 # ---- REDE AVANCADA ----
@@ -2941,6 +3080,7 @@ $script:XamlPanelsD = @'
                                         <Button x:Name="BtnWingetUpgrade" Content="Atualizar Apps Winget" Height="38" Margin="0,0,6,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushSuccess}"/>
                                         <Button x:Name="BtnUninstaller" Content="Desinstalador Seguro" Height="38" Margin="6,0,0,0" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}"/>
                                     </UniformGrid>
+                                    <Button x:Name="BtnChkdsk" Content="Chkdsk /f (agendar no proximo boot)" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushWarning}" Margin="0,8,0,0" ToolTip="Verifica e corrige erros no disco C: - como o disco esta em uso, a checagem so roda na proxima reinicializacao. Requer Administrador."/>
                                     <Button x:Name="BtnMaxPerformance" Content="Habilitar Maximo Desempenho" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Margin="0,8,0,0"/>
                                 </StackPanel>
                             </Border>
@@ -3585,25 +3725,14 @@ function Show-MainWindow {
         Show-Info "Limpeza concluida."
     }.GetNewClosure())
 
-    $window.FindName("BtnSfcScan").Add_Click({
-        $btn = $window.FindName("BtnSfcScan"); $btn.IsEnabled = $false
-        $ov = Show-BusyOverlay -Text "Executando SFC /scannow - isso pode levar varios minutos..."
-        try { Invoke-SfcScan } finally { Close-BusyOverlay -Overlay $ov; $btn.IsEnabled = $true }
-    }.GetNewClosure())
-    $window.FindName("BtnDismRestore").Add_Click({
-        $btn = $window.FindName("BtnDismRestore"); $btn.IsEnabled = $false
-        $ov = Show-BusyOverlay -Text "Executando DISM RestoreHealth - isso pode levar varios minutos..."
-        try { Invoke-DismRestoreHealth } finally { Close-BusyOverlay -Overlay $ov; $btn.IsEnabled = $true }
-    }.GetNewClosure())
-    $window.FindName("BtnWingetUpgrade").Add_Click({
-        $btn = $window.FindName("BtnWingetUpgrade"); $btn.IsEnabled = $false
-        $ov = Show-BusyOverlay -Text "Atualizando aplicativos via winget..."
-        try { Update-WingetApps } finally { Close-BusyOverlay -Overlay $ov; $btn.IsEnabled = $true }
-    }.GetNewClosure())
+    $window.FindName("BtnSfcScan").Add_Click({ Invoke-SfcScan }.GetNewClosure())
+    $window.FindName("BtnDismRestore").Add_Click({ Invoke-DismRestoreHealth }.GetNewClosure())
+    $window.FindName("BtnWingetUpgrade").Add_Click({ Update-WingetApps }.GetNewClosure())
     $window.FindName("BtnUninstaller").Add_Click({
         if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
         Show-UninstallerDialog
     }.GetNewClosure())
+    $window.FindName("BtnChkdsk").Add_Click({ Invoke-ChkdskScheduled -Drive "C:" }.GetNewClosure())
     $window.FindName("BtnMaxPerformance").Add_Click({ Enable-MaxPerformancePowerPlan }.GetNewClosure())
 
     $window.FindName("BtnFerrFlushDns").Add_Click({ Invoke-NetworkTool -Action "Flush DNS" }.GetNewClosure())
