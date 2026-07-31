@@ -19,6 +19,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Evita que qualquer cmdlet (Remove-Item em pasta com filhos, etc.) pare
+# esperando confirmacao interativa no console - a app e single-thread e
+# uma confirmacao pendente trava a janela WPF inteira sem aviso visivel.
+$ConfirmPreference     = "None"
 
 try {
     Add-Type -AssemblyName PresentationFramework -ErrorAction Stop
@@ -34,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.1"
+$global:AppVersion    = "3.1.1"
 $global:SchemaVersion = 1
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
@@ -2618,7 +2622,7 @@ function Clear-BrowserCaches {
 function Clear-PrefetchCache {
     if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
     $p = Join-Path $env:WINDIR "Prefetch"
-    if (Test-Path $p) { Get-ChildItem $p -Force -EA SilentlyContinue | Remove-Item -Force -EA SilentlyContinue }
+    if (Test-Path $p) { Get-ChildItem $p -Force -EA SilentlyContinue | Remove-Item -Force -Recurse -EA SilentlyContinue }
     Write-Log -Message "[CLEANUP] Cache de Prefetch limpo." -Level "SUCCESS"
     Show-Info "Cache de Prefetch limpo."
 }
@@ -2629,7 +2633,7 @@ function Clear-FontCacheData {
         Stop-Service -Name "FontCache" -Force -EA SilentlyContinue
         Start-Sleep -Seconds 1
         $p1 = Join-Path $env:WINDIR "ServiceProfiles\LocalService\AppData\Local\FontCache"
-        if (Test-Path $p1) { Get-ChildItem $p1 -Force -EA SilentlyContinue | Remove-Item -Force -EA SilentlyContinue }
+        if (Test-Path $p1) { Get-ChildItem $p1 -Force -EA SilentlyContinue | Remove-Item -Force -Recurse -EA SilentlyContinue }
         $p2 = Join-Path $env:WINDIR "System32\FNTCACHE.DAT"
         if (Test-Path $p2) { Remove-Item $p2 -Force -EA SilentlyContinue }
         Start-Service -Name "FontCache" -EA SilentlyContinue
@@ -3172,7 +3176,13 @@ function Show-MainWindow {
     $global:ChecklistState = Get-ChecklistState
     $global:ChecklistCheckboxes = @()
 
-    $UpdateChecklistProgress = {
+    # $global: (nao variavel local) porque isso e chamado de dentro do
+    # Add_Click criado dentro de $BuildChecklistColumn - closure criada
+    # durante a execucao de outra closure. Variaveis locais capturadas via
+    # GetNewClosure() nao propagam de forma confiavel nesse cenario de
+    # closure-dentro-de-closure (mesma armadilha de $script: dentro de
+    # closures, ver notas gerais do projeto).
+    $global:UpdateChecklistProgressRef = {
         $total = $global:ChecklistCheckboxes.Count
         $done  = @($global:ChecklistCheckboxes | Where-Object { $_.IsChecked }).Count
         $txtChecklistProgresso.Text = "{0} de {1} concluidos" -f $done,$total
@@ -3196,7 +3206,7 @@ function Show-MainWindow {
                 try {
                     $global:ChecklistState[[string]$cb.Tag] = [bool]$cb.IsChecked
                     Save-ChecklistState -State $global:ChecklistState
-                    & $UpdateChecklistProgress
+                    & $global:UpdateChecklistProgressRef
                 } catch { Write-Log -Message ("[CHECKLIST] Falha ao marcar item: {0}" -f $_.Exception.Message) -Level "ERROR"; Show-ErrorBox $_.Exception.Message }
             }.GetNewClosure())
             [void]$Parent.Children.Add($cb)
@@ -3211,7 +3221,7 @@ function Show-MainWindow {
                     try {
                         $global:ChecklistState[[string]$ccb.Tag] = [bool]$ccb.IsChecked
                         Save-ChecklistState -State $global:ChecklistState
-                        & $UpdateChecklistProgress
+                        & $global:UpdateChecklistProgressRef
                     } catch { Write-Log -Message ("[CHECKLIST] Falha ao marcar item: {0}" -f $_.Exception.Message) -Level "ERROR"; Show-ErrorBox $_.Exception.Message }
                 }.GetNewClosure())
                 [void]$Parent.Children.Add($ccb)
@@ -3223,7 +3233,7 @@ function Show-MainWindow {
     $checklistDef = @(Get-ChecklistDefinition)
     & $BuildChecklistColumn -Parent $spChecklistLeft  -Items @($checklistDef[0..5])
     & $BuildChecklistColumn -Parent $spChecklistRight -Items @($checklistDef[6..7])
-    & $UpdateChecklistProgress
+    & $global:UpdateChecklistProgressRef
 
     $window.FindName("BtnResetarChecklist").Add_Click({
         try {
@@ -3231,7 +3241,7 @@ function Show-MainWindow {
             $global:ChecklistState = @{}
             Save-ChecklistState -State $global:ChecklistState
             foreach ($cb in $global:ChecklistCheckboxes) { $cb.IsChecked = $false }
-            & $UpdateChecklistProgress
+            & $global:UpdateChecklistProgressRef
         } catch { Write-Log -Message ("[CHECKLIST] Falha ao resetar: {0}" -f $_.Exception.Message) -Level "ERROR"; Show-ErrorBox $_.Exception.Message }
     }.GetNewClosure())
 
