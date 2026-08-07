@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.8"
+$global:AppVersion    = "3.8.1"
 $global:SchemaVersion = 2
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
@@ -1220,6 +1220,12 @@ function Install-OnlineApp {
         $wargs=@("install","--id",$wingetId,"--exact","--source","winget","--silent",
                  "--accept-package-agreements","--accept-source-agreements","--disable-interactivity")
         if (-not [string]::IsNullOrWhiteSpace($scope)) { $wargs+=@("--scope",$scope) }
+        # Google Chrome: o "--silent" generico do winget nem sempre e
+        # repassado certo pro instalador de baixo (bootstrapper da Google) -
+        # problema conhecido e recorrente no winget-pkgs. "--override" forca
+        # os switches exatos do instalador do Chrome (/silent /install),
+        # que e o workaround oficial recomendado pra esse pacote.
+        if ($wingetId -eq "Google.Chrome") { $wargs += @("--override","/silent /install") }
         Set-Status ("Instalando {0} via winget..." -f $appName)
         $r=Invoke-ManagedProcess -FilePath $winget -Arguments $wargs -Description ("[INSTALL] winget {0}" -f $appName) -TimeoutSeconds $timeout -BusyText ("Instalando {0} via winget..." -f $appName)
         if ($r.ExitCode -eq 0 -or $r.ExitCode -eq -1978335189 -or $r.ExitCode -eq 3010) { $installed=$true }
