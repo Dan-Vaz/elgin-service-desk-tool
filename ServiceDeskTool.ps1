@@ -38,9 +38,9 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.11"
+$global:AppVersion    = "3.12"
 $global:SchemaVersion = 3
-$global:ExtraSchemaVersion = 3
+$global:ExtraSchemaVersion = 4
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
 $global:AssetsPath    = Join-Path $global:BasePath  "Assets"
@@ -851,7 +851,7 @@ function Update-LegacyDefaultListIfNeeded {
 function Get-DefaultExtraAppList {
     return @(
         [PSCustomObject]@{Name="CrowdStriker (Anti-Virus)"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/FalconSensor_Windows.exe"; SilentArgs=@("/install","/quiet","/norestart","CID=8777EA0847824F13B27F1DFF7C0A27C4-27","ProvWaitTime=1200000"); Ext=".exe"; IsMSI=$false; TimeoutSeconds=1800; Enabled=$true}
-        [PSCustomObject]@{Name="Bitdefender (Anti-Virus - em desativacao)"; Url="https://cloud.gravityzone.bitdefender.com/Packages/BSTWIN/0/setupdownloader_[aHR0cHM6Ly9jbG91ZC1lY3MuZ3Jhdml0eXpvbmUuYml0ZGVmZW5kZXIuY29tL1BhY2thZ2VzL0JTVFdJTi8wL3JjS3F1WC9pbnN0YWxsZXIueG1sP2xhbmc9cHQtQlI=].exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=1800; Enabled=$true}
+        [PSCustomObject]@{Name="Bitdefender (Anti-Virus - em desativacao)"; Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/setupdownloader_.aHR0cHM6Ly9jbG91ZC1lY3MuZ3Jhdml0eXpvbmUuYml0ZGVmZW5kZXIuY29tL1BhY2thZ2VzL0JTVFdJTi8wL3JjS3F1WC9pbnN0YWxsZXIueG1sP2xhbmc9cHQtQlI.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=1800; Enabled=$true}
         [PSCustomObject]@{Name="DELL SupportAssist";        Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/DELL.SupportAssistLauncher.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true}
         [PSCustomObject]@{Name="Easy Inventory (EasyELGIN)"; Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/EasyELGIN.msi"; SilentArgs=@("/qn","/norestart"); Ext=".msi"; IsMSI=$true; TimeoutSeconds=900; Enabled=$true}
         [PSCustomObject]@{Name="FortiClient VPN";           Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/FortiClientVPNOnlineInstaller.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true}
