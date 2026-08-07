@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.7"
+$global:AppVersion    = "3.8"
 $global:SchemaVersion = 2
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
@@ -840,9 +840,28 @@ function Update-LegacyDefaultListIfNeeded {
 # PACOTE EXTRA - instaladores hospedados onde a empresa preferir (ex.: GitHub
 # Releases). Cadastre pela aba "Pacote Extra"; fica salvo em extra_apps.json.
 # ==============================================================================
+
+# extra_apps.json e um arquivo LOCAL por maquina (nao vai no git/gist) -
+# antes, uma maquina nova comecava com Pacote Extra vazio (so ficava
+# populado se um tecnico usasse "Adicionar" manualmente). Isso e o que
+# fazia os itens "sumirem": maquina/instalacao nova = lista vazia, mesmo
+# sendo os instaladores oficiais da empresa. Agora ha uma lista padrao
+# embutida no script (mesmo padrao do Get-DefaultAppList da Lista Padrao).
+function Get-DefaultExtraAppList {
+    return @(
+        [PSCustomObject]@{Name="Bitdefender GravityZone"; Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/setupdownloader_.aHR0cHM6Ly9jbG91ZC1lY3MuZ3Jhdml0eXpvbmUuYml0ZGVmZW5kZXIuY29tL1BhY2thZ2VzL0JTVFdJTi8wL3JjS3F1WC9pbnN0YWxsZXIueG1sP2xhbmc9cHQtQlI.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=1800; Enabled=$true}
+        [PSCustomObject]@{Name="DELL SupportAssist";        Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/DELL.SupportAssistLauncher.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true}
+        [PSCustomObject]@{Name="Easy Inventory (EasyELGIN)"; Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/EasyELGIN.msi"; SilentArgs=@("/qn","/norestart"); Ext=".msi"; IsMSI=$true; TimeoutSeconds=900; Enabled=$true}
+        [PSCustomObject]@{Name="FortiClient VPN";           Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/FortiClientVPNOnlineInstaller.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true}
+        [PSCustomObject]@{Name="HP Support Assistant";      Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/HP.Support.Assistant.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true}
+        [PSCustomObject]@{Name="OCS Inventory Agent";       Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/OcsPackage.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=600; Enabled=$true}
+        [PSCustomObject]@{Name="Linkus VoIP";               Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/Linkus-desktop-win-setup.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=600; Enabled=$true}
+    )
+}
+
 function Initialize-ExtraDatabase {
     if (-not (Test-Path $global:ExtraConfigFile)) {
-        @() | ConvertTo-Json -Depth 5 | Out-File $global:ExtraConfigFile -Encoding UTF8 -Force
+        @(Get-DefaultExtraAppList) | ConvertTo-Json -Depth 5 | Out-File $global:ExtraConfigFile -Encoding UTF8 -Force
     }
 }
 
@@ -852,6 +871,15 @@ function Import-ExtraDatabase {
         $json = Get-Content $global:ExtraConfigFile -Raw -EA Stop | ConvertFrom-Json -EA Stop
         foreach ($item in @($json)) { [void]$global:ExtraAppsList.Add($item) }
     } catch { Write-Log -Message ("Falha ao carregar extra_apps.json: {0}" -f $_.Exception.Message) -Level "WARN" }
+
+    # Rede de seguranca para instalacoes existentes cujo extra_apps.json ja
+    # existia vazio (a causa dos itens terem "sumido") - repovoa com o
+    # padrao e salva, sem sobrescrever customizacoes que ja existirem.
+    if ($global:ExtraAppsList.Count -eq 0) {
+        foreach ($app in Get-DefaultExtraAppList) { [void]$global:ExtraAppsList.Add($app) }
+        Export-ExtraDatabase | Out-Null
+        Write-Log -Message "Pacote Extra estava vazio - lista padrao restaurada." -Level "WARN"
+    }
 }
 
 function Export-ExtraDatabase {
@@ -2613,6 +2641,10 @@ $script:XamlPanelsA = @'
                                         <Button x:Name="BtnBuscarOnline" Content="Buscar" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Width="110" Height="36"/>
                                     </StackPanel>
                                     <StackPanel x:Name="SpBuscaResultados" Margin="0,10,0,0"/>
+                                    <StackPanel x:Name="SpBuscaBotoesSelecao" Orientation="Horizontal" Margin="0,8,0,0" Visibility="Collapsed">
+                                        <Button x:Name="BtnMarcarTodosBusca" Content="Marcar Todos" Width="120" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" Margin="0,0,8,0"/>
+                                        <Button x:Name="BtnDesmarcarTodosBusca" Content="Desmarcar Todos" Width="130" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                    </StackPanel>
                                     <Button x:Name="BtnInstalarBusca" Content="Instalar Selecionados da Busca" Style="{StaticResource CardButton}" Background="{DynamicResource BrushSuccess}" Width="240" HorizontalAlignment="Left" Margin="0,10,0,0" Visibility="Collapsed"/>
                                 </StackPanel>
                             </Border>
@@ -2621,6 +2653,10 @@ $script:XamlPanelsA = @'
                             <Border Style="{StaticResource Card}">
                                 <StackPanel>
                                     <TextBox x:Name="TxtFiltroApps" Style="{StaticResource SearchBox}" Text="Pesquisar na lista padrao..." Foreground="{DynamicResource BrushTextMuted}" Margin="0,0,0,10"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <Button x:Name="BtnMarcarTodosApps" Content="Marcar Todos" Width="120" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" Margin="0,0,8,0"/>
+                                        <Button x:Name="BtnDesmarcarTodosApps" Content="Desmarcar Todos" Width="130" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                    </StackPanel>
                                     <StackPanel x:Name="SpAppsList"/>
                                     <Button x:Name="BtnInstalarSelecionados" Content="Instalar Selecionados" Width="220" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Margin="0,10,0,0"/>
                                 </StackPanel>
@@ -2630,6 +2666,10 @@ $script:XamlPanelsA = @'
                             <Border Style="{StaticResource Card}" Margin="0,0,0,20">
                                 <StackPanel>
                                     <TextBlock Text="Instaladores diretos hospedados fora do winget/choco (Bitdefender, FortiClient, EasyELGIN, etc.)." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <Button x:Name="BtnMarcarTodosExtra" Content="Marcar Todos" Width="120" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" Margin="0,0,8,0"/>
+                                        <Button x:Name="BtnDesmarcarTodosExtra" Content="Desmarcar Todos" Width="130" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                    </StackPanel>
                                     <StackPanel x:Name="SpExtraList"/>
                                     <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                         <Button x:Name="BtnAdicionarExtra" Content="Adicionar" Width="140" Style="{StaticResource CardButton}" Background="{DynamicResource BrushSuccess}" Margin="0,0,10,0"/>
@@ -4622,6 +4662,9 @@ function Show-MainWindow {
         }
     }.GetNewClosure())
 
+    $window.FindName("BtnMarcarTodosApps").Add_Click({ foreach ($cb in $appCheckboxes) { if ($cb.Visibility -eq "Visible") { $cb.IsChecked = $true } } }.GetNewClosure())
+    $window.FindName("BtnDesmarcarTodosApps").Add_Click({ foreach ($cb in $appCheckboxes) { $cb.IsChecked = $false } }.GetNewClosure())
+
     $window.FindName("BtnInstalarSelecionados").Add_Click({
         if (-not $global:IsAdmin) { Show-Warning "Instalacao requer Administrador. Reabra a ferramenta como Admin."; return }
         $selecionados = @($appCheckboxes | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag })
@@ -4644,6 +4687,7 @@ function Show-MainWindow {
     $txtBuscaOnline    = $window.FindName("TxtBuscaOnline")
     $spBuscaResultados = $window.FindName("SpBuscaResultados")
     $btnInstalarBusca  = $window.FindName("BtnInstalarBusca")
+    $spBuscaBotoesSelecao = $window.FindName("SpBuscaBotoesSelecao")
     $global:BuscaCheckboxes = @()
     $window.FindName("BtnBuscarOnline").Add_Click({
         $q = $txtBuscaOnline.Text.Trim()
@@ -4658,6 +4702,7 @@ function Show-MainWindow {
             $lbl.Foreground = Get-ThemeBrush "BrushTextMuted"
             [void]$spBuscaResultados.Children.Add($lbl)
             $btnInstalarBusca.Visibility = "Collapsed"
+            $spBuscaBotoesSelecao.Visibility = "Collapsed"
         } else {
             foreach ($row in $rows) {
                 $cb = New-Object System.Windows.Controls.CheckBox
@@ -4667,9 +4712,12 @@ function Show-MainWindow {
                 $global:BuscaCheckboxes += $cb
             }
             $btnInstalarBusca.Visibility = "Visible"
+            $spBuscaBotoesSelecao.Visibility = "Visible"
         }
         Set-Status ("Busca concluida: {0} resultado(s)." -f @($rows).Count) "SUCCESS"
     }.GetNewClosure())
+    $window.FindName("BtnMarcarTodosBusca").Add_Click({ foreach ($cb in $global:BuscaCheckboxes) { $cb.IsChecked = $true } }.GetNewClosure())
+    $window.FindName("BtnDesmarcarTodosBusca").Add_Click({ foreach ($cb in $global:BuscaCheckboxes) { $cb.IsChecked = $false } }.GetNewClosure())
     $btnInstalarBusca.Add_Click({
         if (-not $global:IsAdmin) { Show-Warning "Instalacao requer Administrador."; return }
         $selecionados = @($global:BuscaCheckboxes | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag })
@@ -4714,6 +4762,8 @@ function Show-MainWindow {
         $novo = Show-AddExtraAppDialog
         if ($novo) { [void]$global:ExtraAppsList.Add($novo); Export-ExtraDatabase | Out-Null; & $RefreshExtraList }
     }.GetNewClosure())
+    $window.FindName("BtnMarcarTodosExtra").Add_Click({ foreach ($cb in $global:ExtraCheckboxes) { $cb.IsChecked = $true } }.GetNewClosure())
+    $window.FindName("BtnDesmarcarTodosExtra").Add_Click({ foreach ($cb in $global:ExtraCheckboxes) { $cb.IsChecked = $false } }.GetNewClosure())
     $window.FindName("BtnInstalarExtra").Add_Click({
         if (-not $global:IsAdmin) { Show-Warning "Instalacao requer Administrador. Reabra a ferramenta como Admin."; return }
         $selecionados = @($global:ExtraCheckboxes | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag })
