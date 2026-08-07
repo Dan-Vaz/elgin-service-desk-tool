@@ -38,8 +38,8 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.5"
-$global:SchemaVersion = 1
+$global:AppVersion    = "3.6"
+$global:SchemaVersion = 2
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
 $global:AssetsPath    = Join-Path $global:BasePath  "Assets"
@@ -310,10 +310,11 @@ function Set-WindowForeground {
 }
 
 function Invoke-ManagedProcess {
-    param([Parameter(Mandatory=$true)][string]$FilePath,[string[]]$Arguments=@(),[string]$Description="Processo",[int]$TimeoutSeconds=0)
+    param([Parameter(Mandatory=$true)][string]$FilePath,[string[]]$Arguments=@(),[string]$Description="Processo",[int]$TimeoutSeconds=0,[string]$BusyText="")
     $argLine = ConvertTo-ProcessArgumentString -Arguments $Arguments
     Write-Log -Message ("{0}: {1} {2}" -f $Description,$FilePath,$argLine)
     $proc = $null
+    $sub  = $null
     try {
         $quote=[char]34
         $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -321,8 +322,7 @@ function Invoke-ManagedProcess {
         # Roda atraves do cmd.exe com 2>&1 para mesclar stderr em stdout num
         # unico pipe - evita o deadlock classico de redirecionamento (ler um
         # stream ate o fim enquanto o outro, ainda nao lido, enche o buffer e
-        # trava o processo filho). So existe um stream para ler de forma
-        # sincrona depois do processo terminar.
+        # trava o processo filho).
         $psi.Arguments              = "/d /s /c "+$quote+$quote+$FilePath+$quote+" "+$argLine+" 2>&1"+$quote
         $psi.UseShellExecute        = $false
         $psi.RedirectStandardOutput = $true
@@ -331,24 +331,39 @@ function Invoke-ManagedProcess {
         $psi.WindowStyle            = [System.Diagnostics.ProcessWindowStyle]::Hidden
         $proc = New-Object System.Diagnostics.Process
         $proc.StartInfo = $psi
-        [void]$proc.Start()
-        $output = $proc.StandardOutput.ReadToEnd()
-        $errorText = ""
 
-        $waitMs = if ($TimeoutSeconds -gt 0) { $TimeoutSeconds * 1000 } else { [int]::MaxValue }
-        $exited = $proc.WaitForExit($waitMs)
-        if (-not $exited) {
+        # Leitura ASSINCRONA (BeginOutputReadLine + evento), nao mais
+        # ReadToEnd() sincrono - isso e o que permite esperar o processo via
+        # Wait-ProcessResponsive (ShowDialog + DispatcherTimer) sem travar a
+        # UI. -MessageData passa o StringBuilder pro handler do evento de
+        # forma confiavel (testado: capturei corretamente saida incremental
+        # de um processo real dentro do wait responsivo antes de aplicar
+        # aqui). CreateNoWindow=true ja evita qualquer risco de deadlock por
+        # buffer cheio, mas a leitura assincrona e mais correta de qualquer
+        # forma.
+        $sb = New-Object System.Text.StringBuilder
+        $onData = { if ($EventArgs.Data -ne $null) { [void]$Event.MessageData.AppendLine($EventArgs.Data) } }
+        [void]$proc.Start()
+        $sub = Register-ObjectEvent -InputObject $proc -EventName OutputDataReceived -Action $onData -MessageData $sb
+        $proc.BeginOutputReadLine()
+
+        $busyTxt = if ($BusyText) { $BusyText } else { $Description }
+        $timedOut = Wait-ProcessResponsive -Process $proc -TimeoutSeconds $TimeoutSeconds -BusyText $busyTxt
+
+        if ($timedOut) {
             try{$proc.Kill()}catch{}
-            return [PSCustomObject]@{ExitCode=-999;Output=$output;Error=("Timeout apos {0}s" -f $TimeoutSeconds)}
+            return [PSCustomObject]@{ExitCode=-999;Output=$sb.ToString();Error=("Timeout apos {0}s" -f $TimeoutSeconds)}
         }
 
-        $exit      = try { $proc.ExitCode } catch { -1 }
+        $exit   = try { $proc.ExitCode } catch { -1 }
+        $output = $sb.ToString()
         if ($output -and $output.Trim()) { Write-Log -Message $output.Trim() }
-        return [PSCustomObject]@{ExitCode=$exit;Output=$output;Error=$errorText}
+        return [PSCustomObject]@{ExitCode=$exit;Output=$output;Error=""}
     } catch {
         Write-Log -Message ("Falha em {0}: {1}" -f $Description,$_.Exception.Message) -Level "ERROR"
         return [PSCustomObject]@{ExitCode=-1;Output="";Error=$_.Exception.Message}
     } finally {
+        if ($sub -ne $null) { try { Unregister-Event -SourceIdentifier $sub.Name -ErrorAction SilentlyContinue; Remove-Job -Id $sub.Id -Force -ErrorAction SilentlyContinue } catch {} }
         if ($proc -ne $null) { try { $proc.Dispose() } catch {} }
     }
 }
@@ -752,7 +767,7 @@ function Get-DefaultAppList {
         [PSCustomObject]@{Name="7-Zip";                           Winget="7zip.7zip";                     Choco="7zip";                    Scope="";TimeoutSeconds=300; Enabled=$true}
         [PSCustomObject]@{Name="Oracle Java Runtime Environment"; Winget="Oracle.JavaRuntimeEnvironment"; Choco="";                        Scope="";TimeoutSeconds=900; Enabled=$true}
         [PSCustomObject]@{Name="Lightshot";                       Winget="Skillbrains.Lightshot";         Choco="lightshot.install";       Scope="";TimeoutSeconds=300; Enabled=$true}
-        [PSCustomObject]@{Name="Microsoft Office";                Winget="Microsoft.Office";              Choco="";                        Scope="";TimeoutSeconds=5400;Enabled=$true}
+        [PSCustomObject]@{Name="Microsoft Office (365 Apps for enterprise, pt-br)"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=5400; Enabled=$true; Special="OfficeODT"}
     )
 }
 
@@ -1018,8 +1033,8 @@ try {
         }
         Set-WindowForeground -Proc $proc -TimeoutSeconds 15
 
-        $exited = $proc.WaitForExit($timeout * 1000)
-        if (-not $exited) { try{$proc.Kill()}catch{}; Write-Log -Message ("[EXTRA] Timeout em {0}" -f $appName) -Level "ERROR"; return $false }
+        $timedOut = Wait-ProcessResponsive -Process $proc -TimeoutSeconds $timeout -BusyText ("Instalando {0}... (se abrir uma janela propria, siga as instrucoes nela)" -f $appName)
+        if ($timedOut) { Write-Log -Message ("[EXTRA] Timeout em {0}" -f $appName) -Level "ERROR"; return $false }
         $exitCode = try { $proc.ExitCode } catch { -1 }
         $ok = ($exitCode -eq 0 -or $exitCode -eq 3010 -or $exitCode -eq 1641)
         if ($ok) { Write-Log -Message ("[EXTRA] {0} instalado com sucesso." -f $appName) -Level "SUCCESS" }
@@ -1031,6 +1046,101 @@ try {
     } finally {
         Start-Sleep -Seconds 2
         if ($tempFile -and (Test-Path $tempFile)) { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# ---- MICROSOFT OFFICE (Microsoft 365 Apps for enterprise) ----
+# O pacote "Microsoft.Office" do winget instala via Microsoft Store e
+# frequentemente resolve pra Microsoft 365 versao consumidor, sem escolha
+# de idioma/SKU - por isso o winget/choco nao sao confiaveis pra Office em
+# ambiente corporativo. O metodo oficial da Microsoft pra scriptar isso e o
+# Office Deployment Tool (ODT): o proprio setup.exe do Click-to-Run pode
+# ser baixado direto (sem precisar do instalador do ODT que so empacota
+# esse mesmo setup.exe) do CDN oficial, e roda com um Configuration.xml
+# escolhendo produto/idioma. Product ID "O365ProPlusRetail" = Microsoft 365
+# Apps for enterprise (a licenca de "Office 365 para grandes empresas").
+$global:OfficeODTSetupUrl = "https://officecdn.microsoft.com/pr/wsus/setup.exe"
+
+function Install-OfficeViaODT {
+    param([Parameter(Mandatory=$true)]$App)
+    if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return $false }
+    $appName = "Microsoft Office (Microsoft 365 Apps for enterprise)"
+    $timeout = 5400
+    try { if ($App.TimeoutSeconds -and [int]$App.TimeoutSeconds -gt 0) { $timeout = [int]$App.TimeoutSeconds } } catch {}
+
+    $workDir  = Join-Path $env:TEMP ("ElginOfficeODT_" + [guid]::NewGuid().ToString("N").Substring(0,8))
+    $setupExe = Join-Path $workDir "setup.exe"
+    $configXml = Join-Path $workDir "configuration.xml"
+    try { New-Item -Path $workDir -ItemType Directory -Force | Out-Null } catch {
+        Write-Log -Message ("[INSTALL] Falha ao criar pasta de trabalho do ODT: {0}" -f $_.Exception.Message) -Level "ERROR"
+        return $false
+    }
+
+    try {
+        Set-Status "Baixando instalador oficial do Office (ODT)..."
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11
+        $downloadOk = $false; $lastError = ""
+
+        $curlExe = "$env:SystemRoot\System32\curl.exe"
+        if (-not (Test-Path $curlExe)) { $curlExe = "$env:SystemRoot\SysWOW64\curl.exe" }
+        if (Test-Path $curlExe) {
+            $cr = Invoke-ManagedProcess -FilePath $curlExe -Arguments @("-L","--fail","--silent","--show-error","-A","Mozilla/5.0 (Windows NT 10.0; Win64; x64)","-o",$setupExe,$global:OfficeODTSetupUrl) -Description "[INSTALL] Download ODT setup.exe" -TimeoutSeconds 300 -BusyText "Baixando instalador oficial do Office..."
+            if ($cr.ExitCode -eq 0 -and (Test-Path $setupExe)) { $downloadOk = $true } else { $lastError = ("curl exit {0}" -f $cr.ExitCode) }
+        }
+        if (-not $downloadOk) {
+            try {
+                $prev = $ProgressPreference; $ProgressPreference = "SilentlyContinue"
+                Invoke-WebRequest -Uri $global:OfficeODTSetupUrl -OutFile $setupExe -UseBasicParsing -Headers @{"User-Agent"="Mozilla/5.0 (Windows NT 10.0; Win64; x64)"} -ErrorAction Stop
+                $ProgressPreference = $prev; $downloadOk = $true
+            } catch { $ProgressPreference = $prev; $lastError = $_.Exception.Message }
+        }
+        if (-not $downloadOk -or -not (Test-Path $setupExe)) {
+            Write-Log -Message ("[INSTALL] Falha ao baixar setup.exe do ODT: {0}" -f $lastError) -Level "ERROR"
+            Show-Warning ("Falha ao baixar o instalador oficial do Office.`n`n{0}" -f $lastError)
+            return $false
+        }
+
+        # Display Level="Full" (nao "None") de proposito: o setup.exe do
+        # Click-to-Run e um instalador grafico, nao um app de console - o
+        # progresso de verdade (a tela "So um instante, preparando o
+        # Office...") so aparece com Full. Rodar como GUI visivel + esperar
+        # via Wait-ProcessResponsive (em vez de WaitForExit direto) e o que
+        # evita a app travar durante os varios minutos que isso leva.
+        $configBody = @'
+<Configuration>
+  <Add OfficeClientEdition="64" Channel="Current">
+    <Product ID="O365ProPlusRetail">
+      <Language ID="pt-br" />
+    </Product>
+  </Add>
+  <Display Level="Full" AcceptEULA="TRUE" />
+  <Property Name="AUTOACTIVATE" Value="1" />
+</Configuration>
+'@
+        Set-Content -Path $configXml -Value $configBody -Encoding ASCII -Force
+
+        Set-Status "Instalando Microsoft Office - isso pode levar bastante tempo..."
+        $quote = [char]34
+        $proc = Start-Process -FilePath $setupExe -ArgumentList ("/configure "+$quote+$configXml+$quote) -PassThru -ErrorAction Stop
+        Set-WindowForeground -Proc $proc -TimeoutSeconds 15
+        $timedOut = Wait-ProcessResponsive -Process $proc -TimeoutSeconds $timeout -BusyText "Instalando Microsoft Office - acompanhe o progresso na janela do instalador..."
+        if ($timedOut) {
+            Write-Log -Message ("[INSTALL] Timeout instalando Office via ODT.") -Level "ERROR"
+            return $false
+        }
+        $exitCode = try { $proc.ExitCode } catch { -1 }
+        $ok = ($exitCode -eq 0)
+        if ($ok) {
+            Write-Log -Message "[INSTALL] Office instalado com sucesso via ODT." -Level "SUCCESS"
+        } else {
+            Write-Log -Message ("[INSTALL] Office ODT terminou com codigo {0}." -f $exitCode) -Level "ERROR"
+        }
+        return $ok
+    } catch {
+        Write-Log -Message ("[INSTALL] Excecao instalando Office via ODT: {0}" -f $_.Exception.Message) -Level "ERROR"
+        return $false
+    } finally {
+        try { Remove-Item -Path $workDir -Recurse -Force -ErrorAction SilentlyContinue } catch {}
     }
 }
 
@@ -1051,6 +1161,9 @@ function Test-AppInstalled {
 
 function Install-OnlineApp {
     param([Parameter(Mandatory=$true)]$App)
+    $special=""; try{$special=[string]$App.Special}catch{$special=""}
+    if ($special -eq "OfficeODT") { return (Install-OfficeViaODT -App $App) }
+
     $appName=[string]$App.Name; $wingetId=[string]$App.Winget; $chocoId=[string]$App.Choco
     $scope=""; try{$scope=[string]$App.Scope}catch{$scope=""}
     $timeout=1800; try{if($App.TimeoutSeconds -and [int]$App.TimeoutSeconds -gt 0){$timeout=[int]$App.TimeoutSeconds}}catch{}
@@ -1068,7 +1181,7 @@ function Install-OnlineApp {
                  "--accept-package-agreements","--accept-source-agreements","--disable-interactivity")
         if (-not [string]::IsNullOrWhiteSpace($scope)) { $wargs+=@("--scope",$scope) }
         Set-Status ("Instalando {0} via winget..." -f $appName)
-        $r=Invoke-ManagedProcess -FilePath $winget -Arguments $wargs -Description ("[INSTALL] winget {0}" -f $appName) -TimeoutSeconds $timeout
+        $r=Invoke-ManagedProcess -FilePath $winget -Arguments $wargs -Description ("[INSTALL] winget {0}" -f $appName) -TimeoutSeconds $timeout -BusyText ("Instalando {0} via winget..." -f $appName)
         if ($r.ExitCode -eq 0 -or $r.ExitCode -eq -1978335189 -or $r.ExitCode -eq 3010) { $installed=$true }
         if (-not $installed) {
             if (Test-AppInstalled -WingetId $wingetId) { $installed=$true }
@@ -1080,7 +1193,7 @@ function Install-OnlineApp {
         $triedAny=$true
         $choco=Get-CommandPathSafe -Name "choco"
         Set-Status ("Instalando {0} via Chocolatey..." -f $appName)
-        $r=Invoke-ManagedProcess -FilePath $choco -Arguments @("install",$chocoId,"-y","--no-progress","--accept-license") -Description ("[INSTALL] choco {0}" -f $appName) -TimeoutSeconds $timeout
+        $r=Invoke-ManagedProcess -FilePath $choco -Arguments @("install",$chocoId,"-y","--no-progress","--accept-license") -Description ("[INSTALL] choco {0}" -f $appName) -TimeoutSeconds $timeout -BusyText ("Instalando {0} via Chocolatey..." -f $appName)
         if ($r.ExitCode -eq 0 -or $r.ExitCode -eq 3010 -or $r.ExitCode -eq 1641) { $installed=$true }
         elseif (([string]$r.Output) -match "already installed") { $installed=$true }
         else { $detail=("choco ExitCode {0}" -f $r.ExitCode) }
