@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.6"
+$global:AppVersion    = "3.7"
 $global:SchemaVersion = 2
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
@@ -477,9 +477,10 @@ function Invoke-VisibleConsoleCommand {
 }
 
 function Invoke-ConsoleCommand {
-    param([Parameter(Mandatory=$true)][string]$CommandLine,[string]$Description="Comando",[int]$TimeoutSeconds=45)
+    param([Parameter(Mandatory=$true)][string]$CommandLine,[string]$Description="Comando",[int]$TimeoutSeconds=45,[string]$BusyText="")
     Write-Log -Message ("{0}: {1}" -f $Description,$CommandLine)
-    $proc=$null
+    $proc = $null
+    $sub  = $null
     try {
         $quote=[char]34
         $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -492,22 +493,33 @@ function Invoke-ConsoleCommand {
         $psi.WindowStyle            = [System.Diagnostics.ProcessWindowStyle]::Hidden
         $proc = New-Object System.Diagnostics.Process
         $proc.StartInfo = $psi
+
+        # Mesmo padrao aplicado em Invoke-ManagedProcess: leitura assincrona
+        # (nao ReadToEnd sincrono) + Wait-ProcessResponsive, pra qualquer
+        # comando via console (Rede, Diagnostico, Maximo Desempenho, etc.)
+        # nao travar a janela principal.
+        $sb = New-Object System.Text.StringBuilder
+        $onData = { if ($EventArgs.Data -ne $null) { [void]$Event.MessageData.AppendLine($EventArgs.Data) } }
         [void]$proc.Start()
-        $output = $proc.StandardOutput.ReadToEnd()
-        $errorText = ""
-        $exited = $proc.WaitForExit($TimeoutSeconds * 1000)
-        if (-not $exited) {
+        $sub = Register-ObjectEvent -InputObject $proc -EventName OutputDataReceived -Action $onData -MessageData $sb
+        $proc.BeginOutputReadLine()
+
+        $busyTxt = if ($BusyText) { $BusyText } else { $Description }
+        $timedOut = Wait-ProcessResponsive -Process $proc -TimeoutSeconds $TimeoutSeconds -BusyText $busyTxt
+
+        if ($timedOut) {
             try{$proc.Kill()}catch{}
-            return [PSCustomObject]@{ExitCode=-999;Output=$output;Error=("Timeout apos {0}s" -f $TimeoutSeconds)}
+            return [PSCustomObject]@{ExitCode=-999;Output=$sb.ToString();Error=("Timeout apos {0}s" -f $TimeoutSeconds)}
         }
-        $exit=try{$proc.ExitCode}catch{-1}
-        if ($output)    { Write-Log -Message $output.Trim() }
-        if ($errorText) { Write-Log -Message $errorText.Trim() -Level "WARN" }
-        return [PSCustomObject]@{ExitCode=$exit;Output=$output;Error=$errorText}
+        $exit   = try{$proc.ExitCode}catch{-1}
+        $output = $sb.ToString()
+        if ($output) { Write-Log -Message $output.Trim() }
+        return [PSCustomObject]@{ExitCode=$exit;Output=$output;Error=""}
     } catch {
         Write-Log -Message ("Falha em {0}: {1}" -f $Description,$_.Exception.Message) -Level "ERROR"
         return [PSCustomObject]@{ExitCode=-1;Output="";Error=$_.Exception.Message}
     } finally {
+        if ($sub -ne $null) { try { Unregister-Event -SourceIdentifier $sub.Name -ErrorAction SilentlyContinue; Remove-Job -Id $sub.Id -Force -ErrorAction SilentlyContinue } catch {} }
         if ($proc -ne $null) { try { $proc.Dispose() } catch {} }
     }
 }
@@ -1435,16 +1447,14 @@ function Clear-GeolocationCache {
 function Invoke-NetworkTool {
     param([string]$Action)
     if (-not $global:IsAdmin -and $Action -in @("Reset Winsock","Renew IP")) { Show-Warning "Esta acao requer Administrador."; return }
-    $ov = Show-BusyOverlay -Text ("{0}..." -f $Action)
-    try {
-        switch ($Action) {
-            "Flush DNS"     { Invoke-ConsoleCommand "ipconfig /flushdns" "[NETWORK] Flush DNS" 60 | Out-Null; Show-Info "Cache DNS limpo." }
-            "Renew IP"      { Invoke-ConsoleCommand "ipconfig /release & ipconfig /renew" "[NETWORK] Renew IP" 120 | Out-Null; Show-Info "IP renovado." }
-            "Reset Winsock" { Invoke-ConsoleCommand "netsh winsock reset" "[NETWORK] Reset Winsock" 120 | Out-Null; Show-Info "Reset Winsock executado. Reinicie o computador." }
-            "Ping Google"   { $r=Invoke-ConsoleCommand "ping 8.8.8.8 -n 4" "[NETWORK] Ping" 60; Show-Info $r.Output "Resultado do Ping" }
-            "Teste DNS"     { $r=Invoke-ConsoleCommand "nslookup google.com" "[NETWORK] DNS" 60; Show-Info ($r.Output+$r.Error) "Resultado DNS" }
-        }
-    } finally { Close-BusyOverlay -Overlay $ov }
+    $busyTxt = "{0}..." -f $Action
+    switch ($Action) {
+        "Flush DNS"     { Invoke-ConsoleCommand "ipconfig /flushdns" "[NETWORK] Flush DNS" 60 -BusyText $busyTxt | Out-Null; Show-Info "Cache DNS limpo." }
+        "Renew IP"      { Invoke-ConsoleCommand "ipconfig /release & ipconfig /renew" "[NETWORK] Renew IP" 120 -BusyText $busyTxt | Out-Null; Show-Info "IP renovado." }
+        "Reset Winsock" { Invoke-ConsoleCommand "netsh winsock reset" "[NETWORK] Reset Winsock" 120 -BusyText $busyTxt | Out-Null; Show-Info "Reset Winsock executado. Reinicie o computador." }
+        "Ping Google"   { $r=Invoke-ConsoleCommand "ping 8.8.8.8 -n 4" "[NETWORK] Ping" 60 -BusyText $busyTxt; Show-Info $r.Output "Resultado do Ping" }
+        "Teste DNS"     { $r=Invoke-ConsoleCommand "nslookup google.com" "[NETWORK] DNS" 60 -BusyText $busyTxt; Show-Info ($r.Output+$r.Error) "Resultado DNS" }
+    }
 }
 
 function Reset-PrintSpooler {
@@ -2861,17 +2871,17 @@ function Enable-MaxPerformancePowerPlan {
     $ultimateSourceGuid = "e9a42b02-d5df-448d-aa00-03f14749eb61"
     $highPerfGuid       = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"
     try {
-        $list = Invoke-ConsoleCommand "powercfg /list" "[REPAIR] powercfg /list" 20
+        $list = Invoke-ConsoleCommand "powercfg /list" "[REPAIR] powercfg /list" 20 -BusyText "Verificando planos de energia..."
         $existing = $null
         if ($list.Output -match "([0-9a-fA-F-]{36})\s+\(.*Desempenho M.ximo.*\)" -or $list.Output -match "([0-9a-fA-F-]{36})\s+\(.*Ultimate Performance.*\)") {
             $existing = $matches[1]
         }
         if (-not $existing) {
-            $dup = Invoke-ConsoleCommand ("powercfg /duplicatescheme {0}" -f $ultimateSourceGuid) "[REPAIR] powercfg /duplicatescheme" 20
+            $dup = Invoke-ConsoleCommand ("powercfg /duplicatescheme {0}" -f $ultimateSourceGuid) "[REPAIR] powercfg /duplicatescheme" 20 -BusyText "Criando plano de maximo desempenho..."
             if ($dup.Output -match "([0-9a-fA-F-]{36})") { $existing = $matches[1] }
         }
         $targetGuid = if ($existing) { $existing } else { $highPerfGuid }
-        Invoke-ConsoleCommand ("powercfg /setactive {0}" -f $targetGuid) "[REPAIR] powercfg /setactive" 20 | Out-Null
+        Invoke-ConsoleCommand ("powercfg /setactive {0}" -f $targetGuid) "[REPAIR] powercfg /setactive" 20 -BusyText "Ativando plano de maximo desempenho..." | Out-Null
         Write-Log -Message ("[REPAIR] Plano de energia ativado: {0}" -f $targetGuid) -Level "SUCCESS"
         Show-Info "Plano de energia de maximo desempenho ativado."
     } catch { Show-ErrorBox ("Falha ao ativar plano de energia.`n`n{0}" -f $_.Exception.Message) }
@@ -2909,14 +2919,11 @@ function Invoke-SafeUninstall {
     param([Parameter(Mandatory=$true)]$Program)
     if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return $false }
     if (-not (Confirm-Action ("Desinstalar '{0}'?`n`nEssa acao abre o desinstalador oficial do programa e nao pode ser desfeita." -f $Program.Name) "Desinstalador Seguro")) { return $false }
-    $ov = $null
     try {
         Set-Status ("Desinstalando {0}..." -f $Program.Name)
-        $ov = Show-BusyOverlay -Text ("Desinstalando {0}... (se abrir uma janela propria, siga as instrucoes nela)" -f $Program.Name)
         Write-Log -Message ("[UNINSTALL] {0}: {1}" -f $Program.Name,$Program.UninstallCmd) -Level "INFO"
-        $r = Invoke-ConsoleCommand $Program.UninstallCmd ("[UNINSTALL] {0}" -f $Program.Name) 600
+        $r = Invoke-ConsoleCommand $Program.UninstallCmd ("[UNINSTALL] {0}" -f $Program.Name) 600 -BusyText ("Desinstalando {0}... (se abrir uma janela propria, siga as instrucoes nela)" -f $Program.Name)
         Write-Log -Message ("[UNINSTALL] {0} finalizado. ExitCode {1}" -f $Program.Name,$r.ExitCode) -Level "SUCCESS"
-        Close-BusyOverlay -Overlay $ov; $ov = $null
         Show-Info ("Desinstalacao de '{0}' finalizada. Se o desinstalador abriu uma janela propria, siga as instrucoes nela." -f $Program.Name)
 
         $residuos = @(Find-UninstallLeftovers -Program $Program)
@@ -3060,25 +3067,28 @@ function Open-PrintersFolder {
 # ---- CACHE DE NAVEGADORES ----
 function Clear-BrowserCaches {
     param([string[]]$Browsers)
+    $ov = Show-BusyOverlay -Text "Limpando cache dos navegadores..."
     $limpos = @()
-    if ($Browsers -contains "Chrome") {
-        $p = Join-Path $env:LOCALAPPDATA "Google\Chrome\User Data\Default\Cache"
-        if (Test-Path $p) { Get-ChildItem $p -Force -Recurse -EA SilentlyContinue | Remove-Item -Force -Recurse -EA SilentlyContinue; $limpos += "Chrome" }
-    }
-    if ($Browsers -contains "Edge") {
-        $p = Join-Path $env:LOCALAPPDATA "Microsoft\Edge\User Data\Default\Cache"
-        if (Test-Path $p) { Get-ChildItem $p -Force -Recurse -EA SilentlyContinue | Remove-Item -Force -Recurse -EA SilentlyContinue; $limpos += "Edge" }
-    }
-    if ($Browsers -contains "Firefox") {
-        $root = Join-Path $env:LOCALAPPDATA "Mozilla\Firefox\Profiles"
-        if (Test-Path $root) {
-            Get-ChildItem $root -Directory -Filter "*.default*" -EA SilentlyContinue | ForEach-Object {
-                $cache2 = Join-Path $_.FullName "cache2"
-                if (Test-Path $cache2) { Get-ChildItem $cache2 -Force -Recurse -EA SilentlyContinue | Remove-Item -Force -Recurse -EA SilentlyContinue }
-            }
-            $limpos += "Firefox"
+    try {
+        if ($Browsers -contains "Chrome") {
+            $p = Join-Path $env:LOCALAPPDATA "Google\Chrome\User Data\Default\Cache"
+            if (Test-Path $p) { Get-ChildItem $p -Force -Recurse -EA SilentlyContinue | Remove-Item -Force -Recurse -EA SilentlyContinue; $limpos += "Chrome" }
         }
-    }
+        if ($Browsers -contains "Edge") {
+            $p = Join-Path $env:LOCALAPPDATA "Microsoft\Edge\User Data\Default\Cache"
+            if (Test-Path $p) { Get-ChildItem $p -Force -Recurse -EA SilentlyContinue | Remove-Item -Force -Recurse -EA SilentlyContinue; $limpos += "Edge" }
+        }
+        if ($Browsers -contains "Firefox") {
+            $root = Join-Path $env:LOCALAPPDATA "Mozilla\Firefox\Profiles"
+            if (Test-Path $root) {
+                Get-ChildItem $root -Directory -Filter "*.default*" -EA SilentlyContinue | ForEach-Object {
+                    $cache2 = Join-Path $_.FullName "cache2"
+                    if (Test-Path $cache2) { Get-ChildItem $cache2 -Force -Recurse -EA SilentlyContinue | Remove-Item -Force -Recurse -EA SilentlyContinue }
+                }
+                $limpos += "Firefox"
+            }
+        }
+    } finally { Close-BusyOverlay -Overlay $ov }
     Write-Log -Message ("[CLEANUP] Cache de navegadores limpo: {0}" -f ($limpos -join ", ")) -Level "SUCCESS"
     Show-Info ("Cache limpo para: {0}.`n`nFeche o navegador antes de limpar para melhores resultados (arquivos em uso sao ignorados)." -f ($(if($limpos.Count -gt 0){$limpos -join ", "}else{"nenhum navegador encontrado"})))
 }
@@ -3114,8 +3124,7 @@ function Clear-FontCacheData {
 
 function Get-ShadowCopiesInfo {
     if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return "" }
-    $ov = Show-BusyOverlay -Text "Consultando shadow copies..."
-    try { $r = Invoke-ConsoleCommand "vssadmin list shadows" "[REPAIR] vssadmin list shadows" 30 } finally { Close-BusyOverlay -Overlay $ov }
+    $r = Invoke-ConsoleCommand "vssadmin list shadows" "[REPAIR] vssadmin list shadows" 30 -BusyText "Consultando shadow copies..."
     return $r.Output
 }
 
@@ -3157,8 +3166,7 @@ function Clear-WindowsOldFolder {
 # poderia remover o driver ativo de uma peca de hardware). Fica pro tecnico
 # decidir manualmente com "pnputil /delete-driver oemXX.inf /uninstall".
 function Get-DriverStoreInfo {
-    $ov = Show-BusyOverlay -Text "Listando drivers no DriverStore..."
-    try { $r = Invoke-ConsoleCommand "pnputil /enum-drivers" "[CLEANUP] pnputil enum-drivers" 60 } finally { Close-BusyOverlay -Overlay $ov }
+    $r = Invoke-ConsoleCommand "pnputil /enum-drivers" "[CLEANUP] pnputil enum-drivers" 60 -BusyText "Listando drivers no DriverStore..."
     return $r.Output
 }
 
@@ -3256,8 +3264,7 @@ function Invoke-DiskOptimize {
 
 function Invoke-BatteryReport {
     $outPath = Join-Path $env:TEMP ("BatteryReport_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".html")
-    $ov = Show-BusyOverlay -Text "Gerando relatorio de bateria..."
-    try { $r = Invoke-ConsoleCommand ("powercfg /batteryreport /output "+([char]34)+$outPath+([char]34)) "[REPAIR] powercfg batteryreport" 30 } finally { Close-BusyOverlay -Overlay $ov }
+    $r = Invoke-ConsoleCommand ("powercfg /batteryreport /output "+([char]34)+$outPath+([char]34)) "[REPAIR] powercfg batteryreport" 30 -BusyText "Gerando relatorio de bateria..."
     if (Test-Path $outPath) {
         try { Start-Process $outPath } catch {}
         Show-Info ("Relatorio de bateria gerado e aberto no navegador.`n`nArquivo: {0}" -f $outPath)
@@ -3503,20 +3510,17 @@ function Show-StartupManagerDialog {
 
 # ---- REDE AVANCADA ----
 function Get-WifiProfilesInfo {
-    $ov = Show-BusyOverlay -Text "Consultando perfis de Wi-Fi..."
-    try { $r = Invoke-ConsoleCommand "netsh wlan show profiles" "[NETWORK] Perfis Wi-Fi" 20 } finally { Close-BusyOverlay -Overlay $ov }
+    $r = Invoke-ConsoleCommand "netsh wlan show profiles" "[NETWORK] Perfis Wi-Fi" 20 -BusyText "Consultando perfis de Wi-Fi..."
     return $r.Output
 }
 
 function Get-NetworkConnectionsInfo {
-    $ov = Show-BusyOverlay -Text "Consultando conexoes e portas..."
-    try { $r = Invoke-ConsoleCommand "netstat -ano" "[NETWORK] Conexoes/Portas" 30 } finally { Close-BusyOverlay -Overlay $ov }
+    $r = Invoke-ConsoleCommand "netstat -ano" "[NETWORK] Conexoes/Portas" 30 -BusyText "Consultando conexoes e portas..."
     return $r.Output
 }
 
 function Get-MappedDrivesInfo {
-    $ov = Show-BusyOverlay -Text "Consultando unidades mapeadas..."
-    try { $r = Invoke-ConsoleCommand "net use" "[NETWORK] Unidades mapeadas" 20 } finally { Close-BusyOverlay -Overlay $ov }
+    $r = Invoke-ConsoleCommand "net use" "[NETWORK] Unidades mapeadas" 20 -BusyText "Consultando unidades mapeadas..."
     return $r.Output
 }
 
@@ -3851,10 +3855,8 @@ function Open-BatterySettings {
 # pastas padrao de instalacao (o caminho muda conforme a versao/arquitetura
 # do Office instalado).
 function Get-ActivationStatusText {
-    $ov = Show-BusyOverlay -Text "Verificando ativacao..."
-    try {
-        $sb = New-Object System.Text.StringBuilder
-        [void]$sb.AppendLine("WINDOWS")
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine("WINDOWS")
         try {
             $lic = Get-CimInstance -Query "SELECT LicenseStatus,Name FROM SoftwareLicensingProduct WHERE PartialProductKey IS NOT NULL AND ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f'" -ErrorAction Stop
             if ($lic) {
@@ -3882,11 +3884,10 @@ function Get-ActivationStatusText {
             [void]$sb.AppendLine("  Office nao encontrado (ospp.vbs nao localizado).")
         } else {
             $ospp = $osppCandidates[0].FullName
-            $r = Invoke-ConsoleCommand ("cscript //nologo "+([char]34)+$ospp+([char]34)+" /dstatus") "[DIAG] ospp.vbs /dstatus" 30
+            $r = Invoke-ConsoleCommand ("cscript //nologo "+([char]34)+$ospp+([char]34)+" /dstatus") "[DIAG] ospp.vbs /dstatus" 30 -BusyText "Verificando ativacao do Office..."
             if ($r.Output) { [void]$sb.AppendLine($r.Output.Trim()) } else { [void]$sb.AppendLine("  Nao foi possivel ler o status do Office.") }
         }
         return $sb.ToString()
-    } finally { Close-BusyOverlay -Overlay $ov }
 }
 
 function Get-BootHistory {
@@ -4584,24 +4585,21 @@ function Show-MainWindow {
     }.GetNewClosure()
     $window.FindName("BtnInstalarWinget").Add_Click({
         $btn = $window.FindName("BtnInstalarWinget"); $btn.IsEnabled = $false
-        $ov = Show-BusyOverlay -Text "Instalando Winget (App Installer)..."
-        try { Install-WingetPackageManager; & $RefreshPkgMgrStatus } finally { Close-BusyOverlay -Overlay $ov; $btn.IsEnabled = $true }
+        try { Install-WingetPackageManager; & $RefreshPkgMgrStatus } finally { $btn.IsEnabled = $true }
     }.GetNewClosure())
     $window.FindName("BtnRepararWinget").Add_Click({
         $btn = $window.FindName("BtnRepararWinget"); $btn.IsEnabled = $false
-        $ov = Show-BusyOverlay -Text "Reparando Winget..."
         try {
             $r = Repair-Winget
             if ($r.Missing) { Show-Warning "Winget nao esta instalado. Use 'Instalar Winget' primeiro." }
             elseif ($r.Ok) { Show-Info "Winget reparado com sucesso." }
             else { Show-Warning "Nao foi possivel reparar o winget automaticamente. Verifique os Logs." }
             & $RefreshPkgMgrStatus
-        } finally { Close-BusyOverlay -Overlay $ov; $btn.IsEnabled = $true }
+        } finally { $btn.IsEnabled = $true }
     }.GetNewClosure())
     $window.FindName("BtnInstalarChoco").Add_Click({
         $btn = $window.FindName("BtnInstalarChoco"); $btn.IsEnabled = $false
-        $ov = Show-BusyOverlay -Text "Instalando Chocolatey..."
-        try { Install-ChocolateyPackageManager; & $RefreshPkgMgrStatus } finally { Close-BusyOverlay -Overlay $ov; $btn.IsEnabled = $true }
+        try { Install-ChocolateyPackageManager; & $RefreshPkgMgrStatus } finally { $btn.IsEnabled = $true }
     }.GetNewClosure())
 
     $spApps = $window.FindName("SpAppsList")
@@ -4651,8 +4649,7 @@ function Show-MainWindow {
         $q = $txtBuscaOnline.Text.Trim()
         if ([string]::IsNullOrWhiteSpace($q)) { Show-Warning "Digite um termo de busca."; return }
         Set-Status ("Buscando '{0}'..." -f $q)
-        $ov = Show-BusyOverlay -Text ("Buscando '{0}'..." -f $q)
-        try { $rows = Search-SoftwarePackages -Query $q } finally { Close-BusyOverlay -Overlay $ov }
+        $rows = Search-SoftwarePackages -Query $q
         $spBuscaResultados.Children.Clear()
         $global:BuscaCheckboxes = @()
         if (@($rows).Count -eq 0) {
@@ -4914,12 +4911,28 @@ function Show-MainWindow {
     $chkLimpWU        = $window.FindName("ChkLimpWU")
     $chkLimpGeo       = $window.FindName("ChkLimpGeo")
     $window.FindName("BtnExecutarLimpeza").Add_Click({
-        if ($chkLimpTemp.IsChecked)    { Invoke-CleanupOperation }
-        if ($chkLimpTempTodos.IsChecked) { Clear-AllUsersTempFolders }
-        if ($chkLimpWinTemp.IsChecked) { Invoke-CleanupOperation -IncludeWindowsTemp }
-        if ($chkLimpLixeira.IsChecked) { Clear-RecycleBinContents }
-        if ($chkLimpWU.IsChecked)      { Clear-WindowsUpdateCache }
-        if ($chkLimpGeo.IsChecked)     { Clear-GeolocationCache }
+        $etapas = New-Object System.Collections.ArrayList
+        if ($chkLimpTemp.IsChecked)      { [void]$etapas.Add(@{ Texto="Limpando temporarios do usuario..."; Acao={ Invoke-CleanupOperation } }) }
+        if ($chkLimpTempTodos.IsChecked) { [void]$etapas.Add(@{ Texto="Limpando temporarios de todos os usuarios..."; Acao={ Clear-AllUsersTempFolders } }) }
+        if ($chkLimpWinTemp.IsChecked)   { [void]$etapas.Add(@{ Texto="Limpando C:\Windows\Temp..."; Acao={ Invoke-CleanupOperation -IncludeWindowsTemp } }) }
+        if ($chkLimpLixeira.IsChecked)   { [void]$etapas.Add(@{ Texto="Esvaziando a lixeira..."; Acao={ Clear-RecycleBinContents } }) }
+        if ($chkLimpWU.IsChecked)        { [void]$etapas.Add(@{ Texto="Limpando cache do Windows Update..."; Acao={ Clear-WindowsUpdateCache } }) }
+        if ($chkLimpGeo.IsChecked)       { [void]$etapas.Add(@{ Texto="Limpando cache de geolocalizacao..."; Acao={ Clear-GeolocationCache } }) }
+        if ($etapas.Count -eq 0) { Show-Warning "Selecione ao menos uma opcao de limpeza."; return }
+
+        $ov = Show-BusyOverlay -Text "Limpando..."
+        $txtOv = if ($ov -ne $null) { $ov.FindName("TxtLoadingStatus") } else { $null }
+        try {
+            $i = 0
+            foreach ($etapa in $etapas) {
+                $i++
+                if ($txtOv -ne $null) {
+                    $txtOv.Text = "{0}/{1}: {2}" -f $i,$etapas.Count,$etapa.Texto
+                    $ov.Dispatcher.Invoke([System.Action]{}, [System.Windows.Threading.DispatcherPriority]::Render)
+                }
+                & $etapa.Acao
+            }
+        } finally { Close-BusyOverlay -Overlay $ov }
         Show-Info "Limpeza concluida."
     }.GetNewClosure())
 
