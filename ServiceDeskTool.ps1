@@ -38,9 +38,9 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.10"
+$global:AppVersion    = "3.11"
 $global:SchemaVersion = 3
-$global:ExtraSchemaVersion = 2
+$global:ExtraSchemaVersion = 3
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
 $global:AssetsPath    = Join-Path $global:BasePath  "Assets"
@@ -851,6 +851,7 @@ function Update-LegacyDefaultListIfNeeded {
 function Get-DefaultExtraAppList {
     return @(
         [PSCustomObject]@{Name="CrowdStriker (Anti-Virus)"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/FalconSensor_Windows.exe"; SilentArgs=@("/install","/quiet","/norestart","CID=8777EA0847824F13B27F1DFF7C0A27C4-27","ProvWaitTime=1200000"); Ext=".exe"; IsMSI=$false; TimeoutSeconds=1800; Enabled=$true}
+        [PSCustomObject]@{Name="Bitdefender (Anti-Virus - em desativacao)"; Url="https://cloud.gravityzone.bitdefender.com/Packages/BSTWIN/0/setupdownloader_[aHR0cHM6Ly9jbG91ZC1lY3MuZ3Jhdml0eXpvbmUuYml0ZGVmZW5kZXIuY29tL1BhY2thZ2VzL0JTVFdJTi8wL3JjS3F1WC9pbnN0YWxsZXIueG1sP2xhbmc9cHQtQlI=].exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=1800; Enabled=$true}
         [PSCustomObject]@{Name="DELL SupportAssist";        Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/DELL.SupportAssistLauncher.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true}
         [PSCustomObject]@{Name="Easy Inventory (EasyELGIN)"; Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/EasyELGIN.msi"; SilentArgs=@("/qn","/norestart"); Ext=".msi"; IsMSI=$true; TimeoutSeconds=900; Enabled=$true}
         [PSCustomObject]@{Name="FortiClient VPN";           Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/FortiClientVPNOnlineInstaller.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true}
@@ -2669,18 +2670,22 @@ $script:XamlPanelsA = @'
                     <ScrollViewer Grid.Row="1">
                         <StackPanel>
                             <Border Style="{StaticResource Card}">
-                                <StackPanel>
-                                    <TextBlock Text="GERENCIADORES DE PACOTE" Foreground="{DynamicResource BrushTextFaint}" FontSize="11" FontWeight="Bold" Margin="0,0,0,10"/>
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                        <TextBlock x:Name="TxtWingetStatus" Text="Winget: verificando..." Foreground="{DynamicResource BrushText}" FontSize="13" VerticalAlignment="Center" Width="260"/>
-                                        <Button x:Name="BtnInstalarWinget" Content="Instalar Winget" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Width="150" Height="30" Margin="0,0,8,0"/>
-                                        <Button x:Name="BtnRepararWinget" Content="Reparar Winget" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" Width="150" Height="30"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="GERENCIADORES DE PACOTE" Foreground="{DynamicResource BrushTextFaint}" FontSize="11" FontWeight="Bold" Margin="0,0,0,10"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                            <TextBlock x:Name="TxtWingetStatus" Text="Winget: verificando..." Foreground="{DynamicResource BrushText}" FontSize="13" VerticalAlignment="Center" Width="260"/>
+                                            <Button x:Name="BtnInstalarWinget" Content="Instalar Winget" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Width="150" Height="30" Margin="0,0,8,0"/>
+                                            <Button x:Name="BtnRepararWinget" Content="Reparar Winget" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" Width="150" Height="30"/>
+                                        </StackPanel>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock x:Name="TxtChocoStatus" Text="Chocolatey: verificando..." Foreground="{DynamicResource BrushText}" FontSize="13" VerticalAlignment="Center" Width="260"/>
+                                            <Button x:Name="BtnInstalarChoco" Content="Instalar Chocolatey" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Width="150" Height="30"/>
+                                        </StackPanel>
                                     </StackPanel>
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock x:Name="TxtChocoStatus" Text="Chocolatey: verificando..." Foreground="{DynamicResource BrushText}" FontSize="13" VerticalAlignment="Center" Width="260"/>
-                                        <Button x:Name="BtnInstalarChoco" Content="Instalar Chocolatey" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Width="150" Height="30"/>
-                                    </StackPanel>
-                                </StackPanel>
+                                    <Button Grid.Column="1" x:Name="BtnAbrirUtilitarios" Content="UTILITARIOS" Style="{StaticResource CardButton}" Background="{DynamicResource BrushSuccess}" Foreground="White" FontWeight="Bold" Width="170" Height="54" VerticalAlignment="Center" Margin="14,0,0,0"/>
+                                </Grid>
                             </Border>
 
                             <Border Style="{StaticResource Card}">
@@ -2699,34 +2704,45 @@ $script:XamlPanelsA = @'
                                 </StackPanel>
                             </Border>
 
-                            <TextBlock Text="LISTA PADRAO" Foreground="{DynamicResource BrushTextFaint}" FontSize="11" FontWeight="Bold" Margin="4,6,0,10"/>
-                            <Border Style="{StaticResource Card}">
-                                <StackPanel>
-                                    <TextBox x:Name="TxtFiltroApps" Style="{StaticResource SearchBox}" Text="Pesquisar na lista padrao..." Foreground="{DynamicResource BrushTextMuted}" Margin="0,0,0,10"/>
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                        <Button x:Name="BtnMarcarTodosApps" Content="Marcar Todos" Width="120" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" Margin="0,0,8,0"/>
-                                        <Button x:Name="BtnDesmarcarTodosApps" Content="Desmarcar Todos" Width="130" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
-                                    </StackPanel>
-                                    <StackPanel x:Name="SpAppsList"/>
-                                    <Button x:Name="BtnInstalarSelecionados" Content="Instalar Selecionados" Width="220" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Margin="0,10,0,0"/>
-                                </StackPanel>
-                            </Border>
+                            <Grid Margin="0,0,0,20">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
 
-                            <TextBlock Text="PACOTE EXTRA" Foreground="{DynamicResource BrushTextFaint}" FontSize="11" FontWeight="Bold" Margin="4,6,0,10"/>
-                            <Border Style="{StaticResource Card}" Margin="0,0,0,20">
-                                <StackPanel>
-                                    <TextBlock Text="Instaladores diretos hospedados fora do winget/choco (Bitdefender, FortiClient, EasyELGIN, etc.)." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,10" TextWrapping="Wrap"/>
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                        <Button x:Name="BtnMarcarTodosExtra" Content="Marcar Todos" Width="120" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" Margin="0,0,8,0"/>
-                                        <Button x:Name="BtnDesmarcarTodosExtra" Content="Desmarcar Todos" Width="130" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
-                                    </StackPanel>
-                                    <StackPanel x:Name="SpExtraList"/>
-                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                        <Button x:Name="BtnAdicionarExtra" Content="Adicionar" Width="140" Style="{StaticResource CardButton}" Background="{DynamicResource BrushSuccess}" Margin="0,0,10,0"/>
-                                        <Button x:Name="BtnInstalarExtra" Content="Instalar Selecionados" Width="220" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
-                                    </StackPanel>
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="LISTA PADRAO" Foreground="{DynamicResource BrushTextFaint}" FontSize="11" FontWeight="Bold" Margin="4,6,0,10"/>
+                                <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="14,6,0,10">
+                                    <TextBlock Text="PACOTE EXTRA" Foreground="{DynamicResource BrushTextFaint}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
+                                    <Border Background="{DynamicResource BrushDanger}" CornerRadius="4" Padding="7,2" Margin="10,0,0,0">
+                                        <TextBlock Text="Instalar apos colocar no dominio" Foreground="White" FontSize="10" FontWeight="Bold"/>
+                                    </Border>
                                 </StackPanel>
-                            </Border>
+
+                                <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,7,0" VerticalAlignment="Top">
+                                    <StackPanel>
+                                        <TextBox x:Name="TxtFiltroApps" Style="{StaticResource SearchBox}" Text="Pesquisar na lista padrao..." Foreground="{DynamicResource BrushTextMuted}" Margin="0,0,0,10"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                            <Button x:Name="BtnMarcarTodosApps" Content="Marcar Todos" Width="120" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" Margin="0,0,8,0"/>
+                                            <Button x:Name="BtnDesmarcarTodosApps" Content="Desmarcar Todos" Width="130" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                        </StackPanel>
+                                        <StackPanel x:Name="SpAppsList"/>
+                                        <Button x:Name="BtnInstalarSelecionados" Content="Instalar Selecionados" Width="220" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Margin="0,10,0,0"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource Card}" Margin="7,0,0,0" VerticalAlignment="Top">
+                                    <StackPanel>
+                                        <TextBlock Text="Instaladores diretos hospedados fora do winget/choco (Bitdefender, FortiClient, EasyELGIN, etc.)." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                            <Button x:Name="BtnMarcarTodosExtra" Content="Marcar Todos" Width="120" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" Margin="0,0,8,0"/>
+                                            <Button x:Name="BtnDesmarcarTodosExtra" Content="Desmarcar Todos" Width="130" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                        </StackPanel>
+                                        <StackPanel x:Name="SpExtraList"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                            <Button x:Name="BtnAdicionarExtra" Content="Adicionar" Width="140" Style="{StaticResource CardButton}" Background="{DynamicResource BrushSuccess}" Margin="0,0,10,0"/>
+                                            <Button x:Name="BtnInstalarExtra" Content="Instalar Selecionados" Width="220" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>
@@ -4690,6 +4706,10 @@ function Show-MainWindow {
     $window.FindName("BtnInstalarChoco").Add_Click({
         $btn = $window.FindName("BtnInstalarChoco"); $btn.IsEnabled = $false
         try { Install-ChocolateyPackageManager; & $RefreshPkgMgrStatus } finally { $btn.IsEnabled = $true }
+    }.GetNewClosure())
+    $window.FindName("BtnAbrirUtilitarios").Add_Click({
+        try { Start-Process "https://drive.google.com/drive/folders/1JaT4OOO1jjLzdyd6D_iz8d2AfK5M39X1?usp=sharing" }
+        catch { Show-Warning "Nao foi possivel abrir a pasta de Utilitarios." }
     }.GetNewClosure())
 
     $spApps = $window.FindName("SpAppsList")
