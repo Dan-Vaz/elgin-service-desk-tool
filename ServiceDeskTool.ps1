@@ -38,8 +38,8 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.9"
-$global:SchemaVersion = 2
+$global:AppVersion    = "3.10"
+$global:SchemaVersion = 3
 $global:ExtraSchemaVersion = 2
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
@@ -776,7 +776,7 @@ function Get-DefaultAppList {
         [PSCustomObject]@{Name="RustDesk";                        Winget="RustDesk.RustDesk";             Choco="rustdesk";                Scope="";TimeoutSeconds=600; Enabled=$true}
         [PSCustomObject]@{Name="Microsoft Teams";                 Winget="Microsoft.Teams";               Choco="microsoft-teams.install"; Scope="";TimeoutSeconds=900; Enabled=$true}
         [PSCustomObject]@{Name="Adobe Acrobat Reader";            Winget="Adobe.Acrobat.Reader.64-bit";   Choco="adobereader";             Scope="";TimeoutSeconds=900; Enabled=$true}
-        [PSCustomObject]@{Name="Google Chrome";                   Winget="Google.Chrome";                 Choco="googlechrome";            Scope="";TimeoutSeconds=600; Enabled=$true}
+        [PSCustomObject]@{Name="Google Chrome"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=600; Enabled=$true; Special="DirectDownload"; Url="https://dl.google.com/edgedl/chrome/install/GoogleChromeStandaloneEnterprise64.msi"; IsMSI=$true; Ext=".msi"; SilentArgs=@("/qn","/norestart")}
         [PSCustomObject]@{Name="7-Zip";                           Winget="7zip.7zip";                     Choco="7zip";                    Scope="";TimeoutSeconds=300; Enabled=$true}
         [PSCustomObject]@{Name="Oracle Java Runtime Environment"; Winget="Oracle.JavaRuntimeEnvironment"; Choco="";                        Scope="";TimeoutSeconds=900; Enabled=$true}
         [PSCustomObject]@{Name="Lightshot";                       Winget="Skillbrains.Lightshot";         Choco="lightshot.install";       Scope="";TimeoutSeconds=300; Enabled=$true}
@@ -1237,6 +1237,22 @@ function Install-OnlineApp {
     param([Parameter(Mandatory=$true)]$App)
     $special=""; try{$special=[string]$App.Special}catch{$special=""}
     if ($special -eq "OfficeODT") { return (Install-OfficeViaODT -App $App) }
+    if ($special -eq "DirectDownload") {
+        # Install-DirectApp nao verifica "ja instalado" sozinho (generico
+        # demais pra isso) - checagem pontual aqui pra nao rebaixar o MSI
+        # do Chrome (~100MB) toda vez que a Lista Padrao roda de novo numa
+        # maquina que ja tem o Chrome.
+        $jaInstalado = @(
+            (Join-Path $env:ProgramFiles "Google\Chrome\Application\chrome.exe")
+            (Join-Path ${env:ProgramFiles(x86)} "Google\Chrome\Application\chrome.exe")
+            (Join-Path $env:LOCALAPPDATA "Google\Chrome\Application\chrome.exe")
+        ) | Where-Object { $_ -and (Test-Path $_) }
+        if ([string]$App.Name -eq "Google Chrome" -and $jaInstalado) {
+            Write-Log -Message "[INSTALL] Google Chrome ja instalado. Pulando." -Level "INFO"
+            return $true
+        }
+        return (Install-DirectApp -App $App)
+    }
 
     $appName=[string]$App.Name; $wingetId=[string]$App.Winget; $chocoId=[string]$App.Choco
     $scope=""; try{$scope=[string]$App.Scope}catch{$scope=""}
@@ -1254,12 +1270,6 @@ function Install-OnlineApp {
         $wargs=@("install","--id",$wingetId,"--exact","--source","winget","--silent",
                  "--accept-package-agreements","--accept-source-agreements","--disable-interactivity")
         if (-not [string]::IsNullOrWhiteSpace($scope)) { $wargs+=@("--scope",$scope) }
-        # Google Chrome: o "--silent" generico do winget nem sempre e
-        # repassado certo pro instalador de baixo (bootstrapper da Google) -
-        # problema conhecido e recorrente no winget-pkgs. "--override" forca
-        # os switches exatos do instalador do Chrome (/silent /install),
-        # que e o workaround oficial recomendado pra esse pacote.
-        if ($wingetId -eq "Google.Chrome") { $wargs += @("--override","/silent /install") }
         Set-Status ("Instalando {0} via winget..." -f $appName)
         $r=Invoke-ManagedProcess -FilePath $winget -Arguments $wargs -Description ("[INSTALL] winget {0}" -f $appName) -TimeoutSeconds $timeout -BusyText ("Instalando {0} via winget..." -f $appName)
         if ($r.ExitCode -eq 0 -or $r.ExitCode -eq -1978335189 -or $r.ExitCode -eq 3010) { $installed=$true }
