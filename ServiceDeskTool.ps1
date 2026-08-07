@@ -38,8 +38,9 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.8.1"
+$global:AppVersion    = "3.9"
 $global:SchemaVersion = 2
+$global:ExtraSchemaVersion = 2
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
 $global:AssetsPath    = Join-Path $global:BasePath  "Assets"
@@ -849,7 +850,7 @@ function Update-LegacyDefaultListIfNeeded {
 # embutida no script (mesmo padrao do Get-DefaultAppList da Lista Padrao).
 function Get-DefaultExtraAppList {
     return @(
-        [PSCustomObject]@{Name="Bitdefender GravityZone"; Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/setupdownloader_.aHR0cHM6Ly9jbG91ZC1lY3MuZ3Jhdml0eXpvbmUuYml0ZGVmZW5kZXIuY29tL1BhY2thZ2VzL0JTVFdJTi8wL3JjS3F1WC9pbnN0YWxsZXIueG1sP2xhbmc9cHQtQlI.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=1800; Enabled=$true}
+        [PSCustomObject]@{Name="CrowdStriker (Anti-Virus)"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/FalconSensor_Windows.exe"; SilentArgs=@("/install","/quiet","/norestart","CID=8777EA0847824F13B27F1DFF7C0A27C4-27","ProvWaitTime=1200000"); Ext=".exe"; IsMSI=$false; TimeoutSeconds=1800; Enabled=$true}
         [PSCustomObject]@{Name="DELL SupportAssist";        Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/DELL.SupportAssistLauncher.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true}
         [PSCustomObject]@{Name="Easy Inventory (EasyELGIN)"; Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/EasyELGIN.msi"; SilentArgs=@("/qn","/norestart"); Ext=".msi"; IsMSI=$true; TimeoutSeconds=900; Enabled=$true}
         [PSCustomObject]@{Name="FortiClient VPN";           Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/FortiClientVPNOnlineInstaller.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true}
@@ -861,15 +862,37 @@ function Get-DefaultExtraAppList {
 
 function Initialize-ExtraDatabase {
     if (-not (Test-Path $global:ExtraConfigFile)) {
-        @(Get-DefaultExtraAppList) | ConvertTo-Json -Depth 5 | Out-File $global:ExtraConfigFile -Encoding UTF8 -Force
+        [PSCustomObject]@{SchemaVersion=$global:ExtraSchemaVersion; Apps=@(Get-DefaultExtraAppList)} |
+            ConvertTo-Json -Depth 5 | Out-File $global:ExtraConfigFile -Encoding UTF8 -Force
     }
+}
+
+# Antes o arquivo era so um array cru (sem versao). Se o arquivo local
+# estiver nesse formato antigo, ou com SchemaVersion desatualizado (ex.:
+# trocar Bitdefender por CrowdStrike na lista padrao), faz backup e
+# restaura a lista nova - mesmo padrao ja usado pro apps.json
+# (Update-LegacyDefaultListIfNeeded).
+function Update-LegacyExtraListIfNeeded {
+    if (-not (Test-Path $global:ExtraConfigFile)) { return }
+    try {
+        $json = Get-Content $global:ExtraConfigFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $cur = if ($json.PSObject.Properties['SchemaVersion']) { [int]$json.SchemaVersion } else { 1 }
+        if ($cur -lt $global:ExtraSchemaVersion) {
+            $bkPath = Join-Path $global:ConfigPath ("extra_apps_v{0}_{1}.json" -f $cur,(Get-Date -Format "yyyyMMdd-HHmmss"))
+            Copy-Item $global:ExtraConfigFile $bkPath -Force -EA SilentlyContinue
+            Write-Log -Message ("Schema de extra_apps.json v{0} -> v{1}. Backup em: {2}. Restaurando lista padrao." -f $cur,$global:ExtraSchemaVersion,$bkPath) -Level "WARN"
+            [PSCustomObject]@{SchemaVersion=$global:ExtraSchemaVersion; Apps=@(Get-DefaultExtraAppList)} |
+                ConvertTo-Json -Depth 5 | Out-File $global:ExtraConfigFile -Encoding UTF8 -Force
+        }
+    } catch { Write-Log -Message ("Falha ao verificar schema de extra_apps.json: {0}" -f $_.Exception.Message) -Level "WARN" }
 }
 
 function Import-ExtraDatabase {
     $global:ExtraAppsList.Clear()
     try {
         $json = Get-Content $global:ExtraConfigFile -Raw -EA Stop | ConvertFrom-Json -EA Stop
-        foreach ($item in @($json)) { [void]$global:ExtraAppsList.Add($item) }
+        $apps = if ($json.PSObject.Properties['Apps']) { @($json.Apps) } else { @($json) }
+        foreach ($item in $apps) { [void]$global:ExtraAppsList.Add($item) }
     } catch { Write-Log -Message ("Falha ao carregar extra_apps.json: {0}" -f $_.Exception.Message) -Level "WARN" }
 
     # Rede de seguranca para instalacoes existentes cujo extra_apps.json ja
@@ -884,7 +907,8 @@ function Import-ExtraDatabase {
 
 function Export-ExtraDatabase {
     try {
-        @($global:ExtraAppsList) | ConvertTo-Json -Depth 5 | Out-File $global:ExtraConfigFile -Encoding UTF8 -Force
+        [PSCustomObject]@{SchemaVersion=$global:ExtraSchemaVersion; Apps=@($global:ExtraAppsList)} |
+            ConvertTo-Json -Depth 5 | Out-File $global:ExtraConfigFile -Encoding UTF8 -Force
         Write-Log -Message "Pacote Extra salvo." -Level "SUCCESS"; return $true
     } catch { Show-ErrorBox ("Falha ao salvar extra_apps.json.`n`n{0}" -f $_.Exception.Message); return $false }
 }
@@ -957,6 +981,8 @@ function Install-DirectApp {
     $ext     = [string]$App.Ext
     $timeout = 1800
     try { if ($App.TimeoutSeconds -and [int]$App.TimeoutSeconds -gt 0) { $timeout=[int]$App.TimeoutSeconds } } catch {}
+    $silentArgs = @()
+    try { if ($App.SilentArgs) { $silentArgs = @($App.SilentArgs | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } } catch { $silentArgs = @() }
 
     if ([string]::IsNullOrWhiteSpace($url)) {
         Write-Log -Message ("[EXTRA] URL nao configurada para '{0}'." -f $appName) -Level "WARN"
@@ -1066,8 +1092,16 @@ try {
         Write-Log -Message ("[EXTRA] Download concluido: {0:N0} bytes" -f $fileSize) -Level "INFO"
 
         Set-Status ("Aguardando instalacao de {0}..." -f $appName)
+        # SilentArgs (vindo do cadastro do app) precisa ser aplicado de
+        # verdade aqui - antes era lido do JSON mas nunca usado na
+        # instalacao em si (MSI sempre rodava so "/norestart" e o EXE
+        # rodava sem nenhum argumento).
         if ($isMSI) {
-            $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList ("/i `"$tempFile`" /norestart") -PassThru -ErrorAction Stop
+            $msiArgs = @("/i",$tempFile)
+            if ($silentArgs.Count -gt 0) { $msiArgs += $silentArgs } else { $msiArgs += "/norestart" }
+            $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -PassThru -ErrorAction Stop
+        } elseif ($silentArgs.Count -gt 0) {
+            $proc = Start-Process -FilePath $tempFile -ArgumentList $silentArgs -PassThru -ErrorAction Stop
         } else {
             $proc = Start-Process -FilePath $tempFile -PassThru -ErrorAction Stop
         }
@@ -5099,6 +5133,7 @@ Initialize-AppDatabase
 Update-LegacyDefaultListIfNeeded
 Import-AppDatabase
 Initialize-ExtraDatabase
+Update-LegacyExtraListIfNeeded
 Import-ExtraDatabase
 Update-Prerequisites
 Show-MainWindow
