@@ -38,9 +38,9 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.12"
-$global:SchemaVersion = 3
-$global:ExtraSchemaVersion = 4
+$global:AppVersion    = "3.13"
+$global:SchemaVersion = 4
+$global:ExtraSchemaVersion = 5
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
 $global:AssetsPath    = Join-Path $global:BasePath  "Assets"
@@ -61,6 +61,21 @@ $global:FormIcon      = $null
 # risco de supply chain: se o repositorio de terceiro for comprometido depois
 # deste commit, esta ferramenta continua executando so o codigo ja auditado.
 $global:RemoveWindowsAIUrl = "https://raw.githubusercontent.com/zoicware/RemoveWindowsAI/47a0b26d43e400e6109933f27cb24629e8a59251/RemoveWindowsAi.ps1"
+
+# O pacote "AnyDesk.AnyDesk" do winget falha com frequencia com "Installer
+# hash does not match" - o instalador oficial (download.anydesk.com/AnyDesk.exe)
+# e auto-atualizavel e o hash muda antes do manifesto do winget-pkgs ser
+# atualizado. Por isso o AnyDesk usa download direto (mesmo padrao do Chrome),
+# nao winget/choco. A senha de acesso nao supervisionado e definida via
+# "AnyDesk.exe --set-password" com a senha passada por STDIN (nunca como
+# argumento de linha de comando - e assim que a AnyDesk documenta, evita a
+# senha aparecer em texto puro no Gerenciador de Tarefas/Process Explorer).
+$global:AnyDeskDownloadUrl        = "https://download.anydesk.com/AnyDesk.exe"
+$global:AnyDeskUnattendedPassword = '$uP0rt&__22'
+
+# Desinstalador oficial do Bitdefender GravityZone (BEST Uninstall Tool).
+$global:BitdefenderUninstallUrl  = "https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/BEST_uninstallTool.exe"
+$global:BitdefenderUninstallArgs = @("/bdparams","/passbase64=RnI2OFMmcjhURiZQUWpieQ==","/noWait")
 
 $global:IsAdmin       = $false
 $global:HasWinget     = $false
@@ -771,8 +786,9 @@ function Save-ChecklistState {
 # BANCO DE APLICATIVOS (Lista Padrao - Winget / Chocolatey)
 # ==============================================================================
 function Get-DefaultAppList {
+    $anyDeskDir = Join-Path ${env:ProgramFiles(x86)} "AnyDesk"
     return @(
-        [PSCustomObject]@{Name="AnyDesk";                         Winget="AnyDesk.AnyDesk";               Choco="anydesk.install";         Scope="";TimeoutSeconds=600; Enabled=$true}
+        [PSCustomObject]@{Name="AnyDesk"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=600; Enabled=$true; Special="AnyDeskDirect"; Url=$global:AnyDeskDownloadUrl; IsMSI=$false; Ext=".exe"; SilentArgs=@("--install",$anyDeskDir,"--start-with-win","--silent")}
         [PSCustomObject]@{Name="RustDesk";                        Winget="RustDesk.RustDesk";             Choco="rustdesk";                Scope="";TimeoutSeconds=600; Enabled=$true}
         [PSCustomObject]@{Name="Microsoft Teams";                 Winget="Microsoft.Teams";               Choco="microsoft-teams.install"; Scope="";TimeoutSeconds=900; Enabled=$true}
         [PSCustomObject]@{Name="Adobe Acrobat Reader";            Winget="Adobe.Acrobat.Reader.64-bit";   Choco="adobereader";             Scope="";TimeoutSeconds=900; Enabled=$true}
@@ -851,7 +867,6 @@ function Update-LegacyDefaultListIfNeeded {
 function Get-DefaultExtraAppList {
     return @(
         [PSCustomObject]@{Name="CrowdStriker (Anti-Virus)"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/FalconSensor_Windows.exe"; SilentArgs=@("/install","/quiet","/norestart","CID=8777EA0847824F13B27F1DFF7C0A27C4-27","ProvWaitTime=1200000"); Ext=".exe"; IsMSI=$false; TimeoutSeconds=1800; Enabled=$true}
-        [PSCustomObject]@{Name="Bitdefender (Anti-Virus - em desativacao)"; Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/setupdownloader_.aHR0cHM6Ly9jbG91ZC1lY3MuZ3Jhdml0eXpvbmUuYml0ZGVmZW5kZXIuY29tL1BhY2thZ2VzL0JTVFdJTi8wL3JjS3F1WC9pbnN0YWxsZXIueG1sP2xhbmc9cHQtQlI.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=1800; Enabled=$true}
         [PSCustomObject]@{Name="DELL SupportAssist";        Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/DELL.SupportAssistLauncher.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true}
         [PSCustomObject]@{Name="Easy Inventory (EasyELGIN)"; Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/EasyELGIN.msi"; SilentArgs=@("/qn","/norestart"); Ext=".msi"; IsMSI=$true; TimeoutSeconds=900; Enabled=$true}
         [PSCustomObject]@{Name="FortiClient VPN";           Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/FortiClientVPNOnlineInstaller.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true}
@@ -1124,6 +1139,75 @@ try {
     }
 }
 
+# ---- ANYDESK (download direto + senha de acesso nao supervisionado) ----
+function Get-AnyDeskExePath {
+    foreach ($base in @(${env:ProgramFiles(x86)},$env:ProgramFiles)) {
+        if ([string]::IsNullOrWhiteSpace($base)) { continue }
+        $p = Join-Path $base "AnyDesk\AnyDesk.exe"
+        if (Test-Path $p) { return $p }
+    }
+    return $null
+}
+
+# "--set-password" precisa da senha via STDIN (nao como argumento de linha de
+# comando - e a forma documentada pela AnyDesk, evita expor a senha em texto
+# puro no Gerenciador de Tarefas/Process Explorer enquanto o comando roda).
+# Usa Wait-ProcessResponsive (nao WaitForExit sincrono) para nao travar a UI.
+function Set-AnyDeskUnattendedPassword {
+    param([Parameter(Mandatory=$true)][string]$ExePath)
+    $proc = $null
+    try {
+        Set-Status "Configurando senha de acesso nao supervisionado do AnyDesk..."
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName              = $ExePath
+        $psi.Arguments             = "--set-password"
+        $psi.UseShellExecute       = $false
+        $psi.RedirectStandardInput = $true
+        $psi.CreateNoWindow        = $true
+        $proc = New-Object System.Diagnostics.Process
+        $proc.StartInfo = $psi
+        [void]$proc.Start()
+        $proc.StandardInput.WriteLine($global:AnyDeskUnattendedPassword)
+        $proc.StandardInput.Close()
+
+        $timedOut = Wait-ProcessResponsive -Process $proc -TimeoutSeconds 20 -BusyText "Configurando senha do AnyDesk..."
+        if ($timedOut) {
+            try { $proc.Kill() } catch {}
+            Write-Log -Message "[INSTALL] Timeout ao definir senha do AnyDesk." -Level "WARN"
+            return $true
+        }
+        $exitCode = try { $proc.ExitCode } catch { -1 }
+        if ($exitCode -eq 0) { Write-Log -Message "[INSTALL] Senha de acesso nao supervisionado do AnyDesk configurada." -Level "SUCCESS" }
+        else { Write-Log -Message ("[INSTALL] AnyDesk --set-password saiu com codigo {0}." -f $exitCode) -Level "WARN" }
+        return $true
+    } catch {
+        Write-Log -Message ("[INSTALL] Falha ao configurar senha do AnyDesk: {0}" -f $_.Exception.Message) -Level "WARN"
+        return $true
+    } finally {
+        if ($proc -ne $null) { try { $proc.Dispose() } catch {} }
+    }
+}
+
+function Install-AnyDeskDirect {
+    param([Parameter(Mandatory=$true)]$App)
+    if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return $false }
+
+    $exePath = Get-AnyDeskExePath
+    if ($exePath) {
+        Write-Log -Message "[INSTALL] AnyDesk ja instalado. Configurando senha de acesso nao supervisionado." -Level "INFO"
+        return (Set-AnyDeskUnattendedPassword -ExePath $exePath)
+    }
+
+    if (-not (Install-DirectApp -App $App)) { return $false }
+
+    $exePath = Get-AnyDeskExePath
+    if (-not $exePath) {
+        Write-Log -Message "[INSTALL] AnyDesk.exe nao encontrado apos a instalacao." -Level "ERROR"
+        return $false
+    }
+    return (Set-AnyDeskUnattendedPassword -ExePath $exePath)
+}
+
 # ---- MICROSOFT OFFICE (Microsoft 365 Apps for enterprise) ----
 # O pacote "Microsoft.Office" do winget instala via Microsoft Store e
 # frequentemente resolve pra Microsoft 365 versao consumidor, sem escolha
@@ -1238,6 +1322,7 @@ function Install-OnlineApp {
     param([Parameter(Mandatory=$true)]$App)
     $special=""; try{$special=[string]$App.Special}catch{$special=""}
     if ($special -eq "OfficeODT") { return (Install-OfficeViaODT -App $App) }
+    if ($special -eq "AnyDeskDirect") { return (Install-AnyDeskDirect -App $App) }
     if ($special -eq "DirectDownload") {
         # Install-DirectApp nao verifica "ja instalado" sozinho (generico
         # demais pra isso) - checagem pontual aqui pra nao rebaixar o MSI
@@ -1330,10 +1415,14 @@ function Repair-Winget {
     return [PSCustomObject]@{ Ok=$global:HasWinget; Missing=$false }
 }
 
+# -Silent: usado na verificacao automatica de inicializacao (sem Confirm-Action
+# nem popups de sucesso/erro - so loga - para nao interromper o tecnico toda
+# vez que a ferramenta abre).
 function Install-WingetPackageManager {
+    param([switch]$Silent)
     Update-Prerequisites
-    if ($global:HasWinget) { Show-Info "Winget ja esta instalado."; return }
-    if (-not (Confirm-Action "Deseja instalar o Winget/App Installer usando o pacote oficial da Microsoft?" "Instalar Winget")) { return }
+    if ($global:HasWinget) { if (-not $Silent) { Show-Info "Winget ja esta instalado." }; return }
+    if (-not $Silent -and -not (Confirm-Action "Deseja instalar o Winget/App Installer usando o pacote oficial da Microsoft?" "Instalar Winget")) { return }
     $wingetUrl  = "https://aka.ms/getwinget"
     $wingetTemp = Join-Path $env:TEMP "Microsoft.DesktopAppInstaller.msixbundle"
     try {
@@ -1356,21 +1445,32 @@ function Install-WingetPackageManager {
                 $ProgressPreference = $prev; $dlOk = $true
             } catch { $ProgressPreference = $prev; $dlErr = $_.Exception.Message }
         }
-        if (-not $dlOk) { Show-ErrorBox ("Falha ao baixar Winget. Todos os metodos falharam.`n`nUltimo erro: {0}" -f $dlErr); return }
+        if (-not $dlOk) {
+            $msg = ("Falha ao baixar Winget. Todos os metodos falharam.`n`nUltimo erro: {0}" -f $dlErr)
+            if ($Silent) { Write-Log -Message ("[STARTUP] {0}" -f $msg) -Level "WARN" } else { Show-ErrorBox $msg }
+            return
+        }
         Set-Status "Instalando Winget/App Installer..."
         Add-AppxPackage -Path $wingetTemp -ErrorAction Stop
         Update-Prerequisites
-        if ($global:HasWinget) { Show-Info "Winget instalado com sucesso." }
-        else { Show-Warning "Instalador executado, mas winget nao foi localizado. Reinicie o PowerShell/computador." }
-    } catch { Show-ErrorBox ("Falha ao instalar Winget.`n`n{0}" -f $_.Exception.Message) }
-    finally { if (Test-Path $wingetTemp) { Remove-Item $wingetTemp -Force -EA SilentlyContinue } }
+        if ($global:HasWinget) {
+            if ($Silent) { Write-Log -Message "[STARTUP] Winget instalado automaticamente com sucesso." -Level "SUCCESS" } else { Show-Info "Winget instalado com sucesso." }
+        } else {
+            $msg = "Instalador executado, mas winget nao foi localizado. Reinicie o PowerShell/computador."
+            if ($Silent) { Write-Log -Message ("[STARTUP] {0}" -f $msg) -Level "WARN" } else { Show-Warning $msg }
+        }
+    } catch {
+        $msg = ("Falha ao instalar Winget.`n`n{0}" -f $_.Exception.Message)
+        if ($Silent) { Write-Log -Message ("[STARTUP] {0}" -f $msg) -Level "ERROR" } else { Show-ErrorBox $msg }
+    } finally { if (Test-Path $wingetTemp) { Remove-Item $wingetTemp -Force -EA SilentlyContinue } }
 }
 
 function Install-ChocolateyPackageManager {
+    param([switch]$Silent)
     Update-Prerequisites
-    if ($global:HasChoco) { Show-Info "Chocolatey ja esta instalado."; return }
-    if (-not $global:IsAdmin) { Show-Warning "A instalacao do Chocolatey requer Administrador."; return }
-    if (-not (Confirm-Action "Deseja instalar o Chocolatey usando o script oficial?" "Instalar Chocolatey")) { return }
+    if ($global:HasChoco) { if (-not $Silent) { Show-Info "Chocolatey ja esta instalado." }; return }
+    if (-not $global:IsAdmin) { if (-not $Silent) { Show-Warning "A instalacao do Chocolatey requer Administrador." }; return }
+    if (-not $Silent -and -not (Confirm-Action "Deseja instalar o Chocolatey usando o script oficial?" "Instalar Chocolatey")) { return }
     try {
         $tempScript = Join-Path $env:TEMP "install_chocolatey.ps1"
         Set-Status "Baixando instalador oficial do Chocolatey..."
@@ -1381,10 +1481,40 @@ function Install-ChocolateyPackageManager {
         $defaultChoco = Join-Path $env:ProgramData "chocolatey\bin\choco.exe"
         if ($global:HasChoco -or (Test-Path $defaultChoco)) {
             $global:HasChoco = $true; Set-Status "Chocolatey instalado com sucesso." "SUCCESS"
-            Show-Info "Chocolatey instalado com sucesso.`n`nSe 'choco' nao for reconhecido, feche e abra a ferramenta novamente."
-        } else { Show-Warning ("Instalador retornou ExitCode {0}, mas choco.exe nao foi localizado. Verifique os Logs." -f $result.ExitCode) }
-    } catch { Show-ErrorBox ("Falha ao instalar Chocolatey.`n`n{0}" -f $_.Exception.Message) }
-    finally { if (Test-Path $tempScript) { Remove-Item $tempScript -Force -EA SilentlyContinue } }
+            if ($Silent) { Write-Log -Message "[STARTUP] Chocolatey instalado automaticamente com sucesso." -Level "SUCCESS" }
+            else { Show-Info "Chocolatey instalado com sucesso.`n`nSe 'choco' nao for reconhecido, feche e abra a ferramenta novamente." }
+        } else {
+            $msg = ("Instalador retornou ExitCode {0}, mas choco.exe nao foi localizado. Verifique os Logs." -f $result.ExitCode)
+            if ($Silent) { Write-Log -Message ("[STARTUP] {0}" -f $msg) -Level "WARN" } else { Show-Warning $msg }
+        }
+    } catch {
+        $msg = ("Falha ao instalar Chocolatey.`n`n{0}" -f $_.Exception.Message)
+        if ($Silent) { Write-Log -Message ("[STARTUP] {0}" -f $msg) -Level "ERROR" } else { Show-ErrorBox $msg }
+    } finally { if (Test-Path $tempScript) { Remove-Item $tempScript -Force -EA SilentlyContinue } }
+}
+
+# Verificacao automatica ao abrir a ferramenta: instala o Winget/Chocolatey se
+# estiverem ausentes, ou repara o Winget se estiver presente mas nao responder
+# (App Installer registrado incorretamente). Roda depois da janela principal
+# aparecer (Add_ContentRendered) - ShowDialog ja bombeia a fila de mensagens
+# durante o Wait-ProcessResponsive de cada instalacao, entao a janela fica
+# responsiva o tempo todo (mesmo padrao "nao trava" usado no resto do app).
+function Initialize-PackageManagersAutoFix {
+    if (-not $global:HasInternet) {
+        Write-Log -Message "[STARTUP] Sem internet - pulando verificacao automatica de Winget/Chocolatey." -Level "WARN"
+        return
+    }
+    if (-not $global:HasWinget) {
+        Write-Log -Message "[STARTUP] Winget nao encontrado. Instalando automaticamente..." -Level "WARN"
+        Install-WingetPackageManager -Silent
+    } elseif ([string]::IsNullOrWhiteSpace((Get-WingetVersion))) {
+        Write-Log -Message "[STARTUP] Winget presente mas nao respondeu. Tentando reparar automaticamente..." -Level "WARN"
+        Repair-Winget | Out-Null
+    }
+    if ($global:IsAdmin -and -not $global:HasChoco) {
+        Write-Log -Message "[STARTUP] Chocolatey nao encontrado. Instalando automaticamente..." -Level "WARN"
+        Install-ChocolateyPackageManager -Silent
+    }
 }
 
 # ==============================================================================
@@ -2730,7 +2860,7 @@ $script:XamlPanelsA = @'
 
                                 <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource Card}" Margin="7,0,0,0" VerticalAlignment="Top">
                                     <StackPanel>
-                                        <TextBlock Text="Instaladores diretos hospedados fora do winget/choco (Bitdefender, FortiClient, EasyELGIN, etc.)." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                                        <TextBlock Text="Instaladores diretos hospedados fora do winget/choco (FortiClient, EasyELGIN, etc.)." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,10" TextWrapping="Wrap"/>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                                             <Button x:Name="BtnMarcarTodosExtra" Content="Marcar Todos" Width="120" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" Margin="0,0,8,0"/>
                                             <Button x:Name="BtnDesmarcarTodosExtra" Content="Desmarcar Todos" Width="130" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
@@ -3730,6 +3860,24 @@ $script:UninstallerDialogXaml = @'
 </Window>
 '@
 
+# Desinstalador oficial do Bitdefender GravityZone (BEST Uninstall Tool) -
+# reaproveita Install-DirectApp (baixa + roda com os argumentos de
+# desinstalacao), mesmo mecanismo generico ja usado no Pacote Extra.
+function Invoke-BitdefenderUninstall {
+    if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
+    if (-not (Confirm-Action "Isso vai baixar e executar o desinstalador oficial do Bitdefender (BEST Uninstall Tool) nesta maquina. Continuar?" "Desinstalador do Bitdefender")) { return }
+    $app = [PSCustomObject]@{
+        Name           = "Bitdefender (Desinstalador)"
+        Url            = $global:BitdefenderUninstallUrl
+        SilentArgs     = $global:BitdefenderUninstallArgs
+        Ext            = ".exe"
+        IsMSI          = $false
+        TimeoutSeconds = 600
+    }
+    if (Install-DirectApp -App $app) { Show-Info "Desinstalador do Bitdefender executado." }
+    else { Show-Warning "Falha ao executar o desinstalador do Bitdefender. Verifique os Logs." }
+}
+
 function Show-UninstallerDialog {
     $reader = [System.Xml.XmlNodeReader]::new([xml]$script:UninstallerDialogXaml)
     $dlg = [System.Windows.Markup.XamlReader]::Load($reader)
@@ -4379,7 +4527,10 @@ $script:XamlPanelsD = @'
                                 <StackPanel>
                                     <TextBlock Text="DESINSTALADOR" Foreground="{DynamicResource BrushDanger}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
                                     <TextBlock Text="Desinstala o programa e depois procura residuos (pastas e chaves de registro) deixados para tras, igual o Revo Uninstaller - voce revisa e escolhe o que apagar." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
-                                    <Button x:Name="BtnUninstaller" Content="Desinstalador Seguro" Height="38" Width="240" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button x:Name="BtnUninstaller" Content="Desinstalador Seguro" Height="38" Width="240" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}" Margin="0,0,10,0"/>
+                                        <Button x:Name="BtnDesinstalarBitdefender" Content="Desinstalador do Bitdefender" Height="38" Width="240" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}"/>
+                                    </StackPanel>
                                 </StackPanel>
                             </Border>
 
@@ -5063,6 +5214,7 @@ function Show-MainWindow {
         if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
         Show-UninstallerDialog
     }.GetNewClosure())
+    $window.FindName("BtnDesinstalarBitdefender").Add_Click({ Invoke-BitdefenderUninstall }.GetNewClosure())
     $window.FindName("BtnChkdsk").Add_Click({ Invoke-ChkdskScheduled -Drive "C:" }.GetNewClosure())
     $window.FindName("BtnMaxPerformance").Add_Click({ Enable-MaxPerformancePowerPlan }.GetNewClosure())
 
@@ -5125,6 +5277,8 @@ function Show-MainWindow {
 
     $window.Add_ContentRendered({
         Update-Prerequisites
+        & $RefreshPkgMgrStatus
+        Initialize-PackageManagersAutoFix
         & $RefreshPkgMgrStatus
         if ($global:IsAdmin) {
             $borderAdminBadge.Background = Get-ThemeBrush "BrushSuccess"
