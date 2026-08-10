@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.14"
+$global:AppVersion    = "3.15"
 $global:SchemaVersion = 5
 $global:ExtraSchemaVersion = 5
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
@@ -1190,18 +1190,38 @@ function Install-AnyDeskDirect {
     param([Parameter(Mandatory=$true)]$App)
     if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return $false }
 
-    # Roda o instalador oficial sempre (baixa a versao mais recente e roda
-    # "--install ... --silent") - se o AnyDesk ja estiver instalado, isso
-    # atualiza a instalacao existente em vez de pular (metodo oficial da
-    # AnyDesk pra atualizar silenciosamente: reinstalar por cima).
-    $jaInstalado = [bool](Get-AnyDeskExePath)
-    if ($jaInstalado) { Write-Log -Message "[INSTALL] AnyDesk ja instalado - atualizando via instalador oficial." -Level "INFO" }
+    $exePath = Get-AnyDeskExePath
+    if ($exePath) {
+        # NAO forca reinstalacao por cima de uma instalacao existente: o
+        # cliente AnyDesk se auto-atualiza sozinho em segundo plano (opcao
+        # "Atualizacao automatica", ligada por padrao) e frequentemente ja
+        # esta em uma versao mais nova que o instalador estatico baixado
+        # aqui. Reinstalar por cima faz o proprio instalador da AnyDesk
+        # recusar (mostra "ja existe uma versao mais nova instalada" e nao
+        # faz nada) - reproduzido manualmente com o mesmo .exe baixado por
+        # este script. So garantimos a senha de acesso nao supervisionado.
+        Write-Log -Message "[INSTALL] AnyDesk ja instalado (se auto-atualiza sozinho). Configurando senha de acesso nao supervisionado." -Level "INFO"
+        return (Set-AnyDeskUnattendedPassword -ExePath $exePath)
+    }
+
+    # AnyDesk.exe nao encontrado em Program Files, mas se a maquina ja teve
+    # AnyDesk instalado antes (desinstalado sem limpeza completa), sobra
+    # config em %ProgramData%\AnyDesk com a versao anterior gravada - isso
+    # engana o instalador com o mesmo "ja existe versao mais nova" mesmo sem
+    # o programa presente. Limpa antes de instalar do zero.
+    $residuo = Join-Path $env:ProgramData "AnyDesk"
+    if (Test-Path $residuo) {
+        Write-Log -Message ("[INSTALL] Residuo encontrado em '{0}' sem AnyDesk.exe instalado - removendo antes de instalar." -f $residuo) -Level "WARN"
+        try { Remove-Item -Path $residuo -Recurse -Force -ErrorAction Stop } catch {
+            Write-Log -Message ("[INSTALL] Falha ao remover residuo do AnyDesk: {0}" -f $_.Exception.Message) -Level "WARN"
+        }
+    }
 
     if (-not (Install-DirectApp -App $App)) { return $false }
 
     $exePath = Get-AnyDeskExePath
     if (-not $exePath) {
-        Write-Log -Message "[INSTALL] AnyDesk.exe nao encontrado apos a instalacao/atualizacao." -Level "ERROR"
+        Write-Log -Message "[INSTALL] AnyDesk.exe nao encontrado apos a instalacao." -Level "ERROR"
         return $false
     }
     return (Set-AnyDeskUnattendedPassword -ExePath $exePath)
