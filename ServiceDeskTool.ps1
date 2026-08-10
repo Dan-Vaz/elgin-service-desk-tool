@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.15"
+$global:AppVersion    = "3.16"
 $global:SchemaVersion = 5
 $global:ExtraSchemaVersion = 5
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
@@ -1186,6 +1186,34 @@ function Set-AnyDeskUnattendedPassword {
     }
 }
 
+# O "--silent" do instalador da AnyDesk registra o servico e o item no
+# Painel de Controle, mas de proposito NAO cria atalho nenhum (Area de
+# Trabalho/Menu Iniciar) - confirmado apos instalacao real numa maquina de
+# teste. Cria os atalhos manualmente via WScript.Shell (COM nativo do
+# Windows, sem dependencia extra) pra ficar igual a uma instalacao normal.
+function New-AnyDeskShortcuts {
+    param([Parameter(Mandatory=$true)][string]$ExePath)
+    try {
+        $wsh = New-Object -ComObject WScript.Shell
+        $alvos = @(
+            (Join-Path ([Environment]::GetFolderPath("CommonDesktopDirectory")) "AnyDesk.lnk")
+            (Join-Path ([Environment]::GetFolderPath("CommonStartMenu")) "Programs\AnyDesk.lnk")
+        )
+        foreach ($lnkPath in $alvos) {
+            $sc = $wsh.CreateShortcut($lnkPath)
+            $sc.TargetPath       = $ExePath
+            $sc.WorkingDirectory = Split-Path $ExePath -Parent
+            $sc.IconLocation     = $ExePath
+            $sc.Save()
+        }
+        Write-Log -Message "[INSTALL] Atalhos do AnyDesk criados (Area de Trabalho + Menu Iniciar)." -Level "SUCCESS"
+    } catch {
+        Write-Log -Message ("[INSTALL] Falha ao criar atalhos do AnyDesk: {0}" -f $_.Exception.Message) -Level "WARN"
+    } finally {
+        if ($wsh -ne $null) { try { [void][System.Runtime.Interopservices.Marshal]::ReleaseComObject($wsh) } catch {} }
+    }
+}
+
 function Install-AnyDeskDirect {
     param([Parameter(Mandatory=$true)]$App)
     if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return $false }
@@ -1199,8 +1227,10 @@ function Install-AnyDeskDirect {
         # aqui. Reinstalar por cima faz o proprio instalador da AnyDesk
         # recusar (mostra "ja existe uma versao mais nova instalada" e nao
         # faz nada) - reproduzido manualmente com o mesmo .exe baixado por
-        # este script. So garantimos a senha de acesso nao supervisionado.
+        # este script. So garantimos a senha e os atalhos (idempotente -
+        # nao tem problema recriar se ja existirem).
         Write-Log -Message "[INSTALL] AnyDesk ja instalado (se auto-atualiza sozinho). Configurando senha de acesso nao supervisionado." -Level "INFO"
+        New-AnyDeskShortcuts -ExePath $exePath
         return (Set-AnyDeskUnattendedPassword -ExePath $exePath)
     }
 
@@ -1224,6 +1254,7 @@ function Install-AnyDeskDirect {
         Write-Log -Message "[INSTALL] AnyDesk.exe nao encontrado apos a instalacao." -Level "ERROR"
         return $false
     }
+    New-AnyDeskShortcuts -ExePath $exePath
     return (Set-AnyDeskUnattendedPassword -ExePath $exePath)
 }
 
