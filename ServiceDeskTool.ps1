@@ -38,8 +38,8 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.13"
-$global:SchemaVersion = 4
+$global:AppVersion    = "3.14"
+$global:SchemaVersion = 5
 $global:ExtraSchemaVersion = 5
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
@@ -664,13 +664,6 @@ function Get-ThemeResourceDictionaryXaml {
 '@
 }
 
-function Get-UiPrefs {
-    if (Test-Path $global:UiPrefsFile) {
-        try { return (Get-Content $global:UiPrefsFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop) } catch {}
-    }
-    return [PSCustomObject]@{ Theme = "Dark" }
-}
-
 function Save-UiPrefs {
     param([string]$Theme)
     try { [PSCustomObject]@{ Theme = $Theme } | ConvertTo-Json | Out-File $global:UiPrefsFile -Encoding UTF8 -Force } catch {}
@@ -786,7 +779,12 @@ function Save-ChecklistState {
 # BANCO DE APLICATIVOS (Lista Padrao - Winget / Chocolatey)
 # ==============================================================================
 function Get-DefaultAppList {
-    $anyDeskDir = Join-Path ${env:ProgramFiles(x86)} "AnyDesk"
+    # Start-Process -ArgumentList NAO coloca aspas em elementos com espaco
+    # (testado: um caminho com espaco vira varios argumentos soltos pro
+    # instalador, que ai ignora "--install" silenciosamente) - as aspas
+    # tem que vir escritas dentro do proprio elemento do array.
+    $q = [char]34
+    $anyDeskDir = $q + (Join-Path ${env:ProgramFiles(x86)} "AnyDesk") + $q
     return @(
         [PSCustomObject]@{Name="AnyDesk"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=600; Enabled=$true; Special="AnyDeskDirect"; Url=$global:AnyDeskDownloadUrl; IsMSI=$false; Ext=".exe"; SilentArgs=@("--install",$anyDeskDir,"--start-with-win","--silent")}
         [PSCustomObject]@{Name="RustDesk";                        Winget="RustDesk.RustDesk";             Choco="rustdesk";                Scope="";TimeoutSeconds=600; Enabled=$true}
@@ -1192,17 +1190,18 @@ function Install-AnyDeskDirect {
     param([Parameter(Mandatory=$true)]$App)
     if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return $false }
 
-    $exePath = Get-AnyDeskExePath
-    if ($exePath) {
-        Write-Log -Message "[INSTALL] AnyDesk ja instalado. Configurando senha de acesso nao supervisionado." -Level "INFO"
-        return (Set-AnyDeskUnattendedPassword -ExePath $exePath)
-    }
+    # Roda o instalador oficial sempre (baixa a versao mais recente e roda
+    # "--install ... --silent") - se o AnyDesk ja estiver instalado, isso
+    # atualiza a instalacao existente em vez de pular (metodo oficial da
+    # AnyDesk pra atualizar silenciosamente: reinstalar por cima).
+    $jaInstalado = [bool](Get-AnyDeskExePath)
+    if ($jaInstalado) { Write-Log -Message "[INSTALL] AnyDesk ja instalado - atualizando via instalador oficial." -Level "INFO" }
 
     if (-not (Install-DirectApp -App $App)) { return $false }
 
     $exePath = Get-AnyDeskExePath
     if (-not $exePath) {
-        Write-Log -Message "[INSTALL] AnyDesk.exe nao encontrado apos a instalacao." -Level "ERROR"
+        Write-Log -Message "[INSTALL] AnyDesk.exe nao encontrado apos a instalacao/atualizacao." -Level "ERROR"
         return $false
     }
     return (Set-AnyDeskUnattendedPassword -ExePath $exePath)
@@ -4577,8 +4576,10 @@ function Show-MainWindow {
         $e.Handled = $true
     })
 
-    $prefs = Get-UiPrefs
-    Set-AppTheme -Theme $prefs.Theme
+    # Sempre abre no tema claro, independente do que foi salvo da ultima vez
+    # que o tecnico trocou de tema - troca continua disponivel a qualquer
+    # momento pelo botao "Tema" na barra superior.
+    Set-AppTheme -Theme "Light"
 
     if (Test-Path $global:IconFile) {
         try { $window.Icon = New-Object System.Windows.Media.Imaging.BitmapImage([uri]$global:IconFile) } catch {}
