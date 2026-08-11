@@ -5026,6 +5026,16 @@ function Invoke-DeployAction {
         # (testado isoladamente: "not recognized as a name of a cmdlet").
         # Passa o texto e reconstroi com [scriptblock]::Create() dentro do
         # job. PSCredential nao tem esse problema, atravessa como objeto real.
+        #
+        # So WinRM de proposito (sem fallback via WMI/DCOM): WMI/DCOM usa
+        # portas RPC dinamicas + execucao via linha de comando codificada em
+        # base64 no processo remoto - exatamente o padrao de trafego que
+        # EDR/antivirus associa a movimento lateral, mais "barulhento" na
+        # rede do que WinRM (porta unica e fixa, canal de administracao
+        # padrao e esperado). Se a maquina alvo der o erro classico "O
+        # cliente nao conseguiu se conectar ao destino especificado", o
+        # WinRM precisa ser habilitado la (idealmente via GPO pra todo o
+        # dominio de uma vez - nao da pra contornar isso de forma discreta).
         $j = Start-Job -ScriptBlock {
             param($Hostname,$Cred,$InnerSbText,$AppsPayload)
             try {
