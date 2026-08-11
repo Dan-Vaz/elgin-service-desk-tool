@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.19"
+$global:AppVersion    = "3.20"
 $global:SchemaVersion = 5
 $global:ExtraSchemaVersion = 6
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
@@ -4017,6 +4017,78 @@ function Invoke-BitdefenderUninstall {
     else { Show-Warning "Falha ao executar o desinstalador do Bitdefender. Verifique os Logs." }
 }
 
+# Pegar Senha do LAPS - pede o hostname, consulta a senha de administrador
+# local via Get-LapsADPassword (modulo LAPS do Windows) e mostra o
+# resultado, copiando a senha pra area de transferencia. Portado de um
+# script solto (D:\Elgin\Scripts\Scripts\Get-Laps.ps1, so existia nesta
+# maquina) pra dentro do proprio ServiceDeskTool.ps1 - o launcher .bat
+# baixa so este arquivo via Gist, entao qualquer dependencia de caminho
+# local nao funcionaria na maquina de outro tecnico. Usa os dialogos WPF
+# ja padronizados do app (Show-TextResultDialog/Show-Warning/Show-ErrorBox)
+# em vez de Windows.Forms/Microsoft.VisualBasic do script original.
+$script:LapsHostnameDialogXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Pegar Senha do LAPS" Height="220" Width="400"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        Background="{DynamicResource BrushSurface}">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/><RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <TextBlock Grid.Row="0" Text="Consulta de Senha LAPS" Foreground="{DynamicResource BrushText}" FontWeight="Bold"/>
+        <TextBlock Grid.Row="1" Text="Informe o hostname do computador:" Foreground="{DynamicResource BrushTextMuted}" FontSize="11" Margin="0,4,0,14"/>
+        <TextBox x:Name="TxtLapsHostname" Grid.Row="2" Height="30" Padding="6,4" VerticalAlignment="Top" Background="{DynamicResource BrushInputBg}" Foreground="{DynamicResource BrushText}" BorderBrush="{DynamicResource BrushInputBorder}"/>
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button x:Name="BtnCancelar" Content="Cancelar" Width="100" Height="34" Margin="0,0,10,0" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" BorderThickness="0"/>
+            <Button x:Name="BtnConsultar" Content="Consultar" Width="120" Height="34" Background="{DynamicResource BrushAccent}" Foreground="White" BorderThickness="0" FontWeight="Bold"/>
+        </StackPanel>
+    </Grid>
+</Window>
+'@
+
+function Show-LapsHostnameDialog {
+    $reader = [System.Xml.XmlNodeReader]::new([xml]$script:LapsHostnameDialogXaml)
+    $dlg = [System.Windows.Markup.XamlReader]::Load($reader)
+    $dlg.Owner = $global:MainWindow
+    Set-DialogTheme -Dialog $dlg
+
+    $txtHost = $dlg.FindName("TxtLapsHostname")
+    $global:LapsHostnameDialogResult = $null
+    $dlg.FindName("BtnConsultar").Add_Click({
+        $h = $txtHost.Text.Trim()
+        if ([string]::IsNullOrWhiteSpace($h)) { Show-Warning "Informe o hostname."; return }
+        $global:LapsHostnameDialogResult = $h
+        $dlg.DialogResult = $true
+        $dlg.Close()
+    }.GetNewClosure())
+    $dlg.FindName("BtnCancelar").Add_Click({ $dlg.DialogResult = $false; $dlg.Close() }.GetNewClosure())
+    [void]$dlg.ShowDialog()
+    return $global:LapsHostnameDialogResult
+}
+
+function Invoke-LapsPasswordLookup {
+    $hostname = Show-LapsHostnameDialog
+    if (-not $hostname) { return }
+    try {
+        Set-Status ("Consultando senha LAPS para {0}..." -f $hostname)
+        Import-Module -Name LAPS -ErrorAction Stop
+        $lapsInfo = Get-LapsADPassword -Identity $hostname -AsPlainText -ErrorAction Stop
+        if (-not $lapsInfo) {
+            Show-Warning ("Nao foi possivel recuperar a senha LAPS para '{0}'. Verifique o nome do computador e suas permissoes." -f $hostname)
+            return
+        }
+        Set-Clipboard -Value $lapsInfo.Password
+        $texto = "Hostname: {0}`nPassword: {1}`nExpirationTimestamp: {2}`n`nA senha foi copiada para a area de transferencia." -f $hostname,$lapsInfo.Password,$lapsInfo.ExpirationTimestamp
+        Write-Log -Message ("[LAPS] Senha consultada para {0}." -f $hostname) -Level "SUCCESS"
+        Show-TextResultDialog -Title "Senha LAPS" -Text $texto
+    } catch {
+        Write-Log -Message ("[LAPS] Falha ao consultar {0}: {1}" -f $hostname,$_.Exception.Message) -Level "ERROR"
+        Show-ErrorBox ("Erro ao consultar a senha LAPS.`n`n{0}" -f $_.Exception.Message)
+    }
+}
+
 function Show-UninstallerDialog {
     $reader = [System.Xml.XmlNodeReader]::new([xml]$script:UninstallerDialogXaml)
     $dlg = [System.Windows.Markup.XamlReader]::Load($reader)
@@ -4723,7 +4795,7 @@ $script:XamlPanelsD = @'
                     <ScrollViewer Grid.Row="2">
                         <Grid>
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
                             <!-- DESINSTALADOR SEGURO -->
                             <Border Grid.Row="0" Grid.Column="0" Margin="0,0,5,12" Style="{StaticResource Card}">
@@ -4758,6 +4830,15 @@ $script:XamlPanelsD = @'
                                     <TextBlock Text="CONFIGURACOES" Foreground="{DynamicResource BrushTextMuted}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
                                     <Button x:Name="BtnResetAppsJson" Content="Apagar JSON e Recriar Lista Padrao" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}" Margin="0,0,0,8"/>
                                     <Button x:Name="BtnAbrirPastaFerramenta" Content="Abrir Pasta da Ferramenta" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- LAPS -->
+                            <Border Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,0,0,12" Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="LAPS" Foreground="{DynamicResource BrushAccent}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <TextBlock Text="Consulta a senha de administrador local (LAPS) de um computador pelo hostname e copia para a area de transferencia." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <Button x:Name="BtnPegarSenhaLaps" Content="Pegar Senha do LAPS" Height="38" Width="240" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}"/>
                                 </StackPanel>
                             </Border>
                         </Grid>
@@ -5740,6 +5821,7 @@ function Show-MainWindow {
         Show-UninstallerDialog
     }.GetNewClosure())
     $window.FindName("BtnDesinstalarBitdefender").Add_Click({ Invoke-BitdefenderUninstall }.GetNewClosure())
+    $window.FindName("BtnPegarSenhaLaps").Add_Click({ Invoke-LapsPasswordLookup }.GetNewClosure())
     $window.FindName("BtnChkdsk").Add_Click({ Invoke-ChkdskScheduled -Drive "C:" }.GetNewClosure())
     $window.FindName("BtnMaxPerformance").Add_Click({ Enable-MaxPerformancePowerPlan }.GetNewClosure())
 
