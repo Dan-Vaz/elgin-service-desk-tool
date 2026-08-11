@@ -38,9 +38,9 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.16"
+$global:AppVersion    = "3.17"
 $global:SchemaVersion = 5
-$global:ExtraSchemaVersion = 5
+$global:ExtraSchemaVersion = 6
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
 $global:AssetsPath    = Join-Path $global:BasePath  "Assets"
@@ -97,6 +97,12 @@ $global:BellBadgeLabel  = $null
 $global:BellBadgeBorder = $null
 $global:NavButtons      = $null
 $global:ShowSectionRef  = $null
+
+# Deploy Remoto - credencial fica so em memoria (PSCredential), nunca gravada
+# em disco. Alvos ficam numa lista em memoria tambem (nao persistida - lista
+# de maquinas muda a cada visita, nao faz sentido guardar entre sessoes).
+$global:DeployCredential = $null
+$global:DeployTargets    = New-Object System.Collections.ArrayList
 
 function Get-Brush { param([string]$Hex) [System.Windows.Media.BrushConverter]::new().ConvertFromString($Hex) }
 
@@ -440,6 +446,61 @@ function Wait-ProcessResponsive {
         }
     }
     if (-not $Process.HasExited) { try { $Process.WaitForExit(2000) } catch {} }
+    return [bool]$state.TimedOut
+}
+
+# Mesmo padrao do Wait-ProcessResponsive acima, mas pra um array de PowerShell
+# Jobs (usado pelo Deploy Remoto: Invoke-Command bloqueia a thread que chama
+# sem nenhum jeito de fazer polling nativo tipo Process.HasExited, entao cada
+# maquina alvo roda como um Job em segundo plano e este wait so faz o polling
+# de .State via DispatcherTimer). Mostra quantos jobs ja terminaram no texto
+# do overlay - todos os jobs continuam rodando em paralelo por baixo.
+function Wait-JobsResponsive {
+    param([Parameter(Mandatory=$true)][array]$Jobs,[int]$TimeoutSeconds=900,[string]$BusyTextPrefix="Executando")
+    $overlay = $null
+    $txtStatus = $null
+    try {
+        $overlayReader = [System.Xml.XmlNodeReader]::new([xml]$global:LoadingOverlayXaml)
+        $overlay = [System.Windows.Markup.XamlReader]::Load($overlayReader)
+        $overlay.Owner = $global:MainWindow
+        Set-DialogTheme -Dialog $overlay
+        $txtStatus = $overlay.FindName("TxtLoadingStatus")
+    } catch { $overlay = $null }
+
+    $state = @{ TimedOut = $false }
+    $total = $Jobs.Count
+    if ($overlay -ne $null) {
+        $start = Get-Date
+        $timer = New-Object System.Windows.Threading.DispatcherTimer
+        $timer.Interval = [TimeSpan]::FromMilliseconds(400)
+        $timer.Add_Tick({
+            $done = @($Jobs | Where-Object { $_.State -ne 'Running' -and $_.State -ne 'NotStarted' }).Count
+            if ($txtStatus -ne $null) { $txtStatus.Text = "{0}... ({1}/{2} concluidas)" -f $BusyTextPrefix,$done,$total }
+            if ($done -ge $total) {
+                $timer.Stop(); $overlay.Close()
+            } elseif ($TimeoutSeconds -gt 0 -and ((Get-Date) - $start).TotalSeconds -gt $TimeoutSeconds) {
+                $timer.Stop()
+                foreach ($j in $Jobs) { try { Stop-Job $j -ErrorAction SilentlyContinue } catch {} }
+                $state.TimedOut = $true
+                $overlay.Close()
+            }
+        }.GetNewClosure())
+        $timer.Start()
+        [void]$overlay.ShowDialog()
+    } else {
+        # Overlay falhou ao carregar - ainda assim nao trava: pump manual
+        # da fila de mensagens da UI entre cada verificacao.
+        $start = Get-Date
+        while (@($Jobs | Where-Object { $_.State -eq 'Running' -or $_.State -eq 'NotStarted' }).Count -gt 0) {
+            Start-Sleep -Milliseconds 300
+            if ($global:MainWindow -ne $null) { $global:MainWindow.Dispatcher.Invoke([System.Action]{}, [System.Windows.Threading.DispatcherPriority]::Background) }
+            if ($TimeoutSeconds -gt 0 -and ((Get-Date) - $start).TotalSeconds -gt $TimeoutSeconds) {
+                foreach ($j in $Jobs) { try { Stop-Job $j -ErrorAction SilentlyContinue } catch {} }
+                $state.TimedOut = $true
+                break
+            }
+        }
+    }
     return [bool]$state.TimedOut
 }
 
@@ -864,13 +925,13 @@ function Update-LegacyDefaultListIfNeeded {
 # embutida no script (mesmo padrao do Get-DefaultAppList da Lista Padrao).
 function Get-DefaultExtraAppList {
     return @(
-        [PSCustomObject]@{Name="CrowdStriker (Anti-Virus)"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/FalconSensor_Windows.exe"; SilentArgs=@("/install","/quiet","/norestart","CID=8777EA0847824F13B27F1DFF7C0A27C4-27","ProvWaitTime=1200000"); Ext=".exe"; IsMSI=$false; TimeoutSeconds=1800; Enabled=$true}
-        [PSCustomObject]@{Name="DELL SupportAssist";        Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/DELL.SupportAssistLauncher.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true}
-        [PSCustomObject]@{Name="Easy Inventory (EasyELGIN)"; Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/EasyELGIN.msi"; SilentArgs=@("/qn","/norestart"); Ext=".msi"; IsMSI=$true; TimeoutSeconds=900; Enabled=$true}
-        [PSCustomObject]@{Name="FortiClient VPN";           Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/FortiClientVPNOnlineInstaller.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true}
-        [PSCustomObject]@{Name="HP Support Assistant";      Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/HP.Support.Assistant.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true}
-        [PSCustomObject]@{Name="OCS Inventory Agent";       Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/OcsPackage.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=600; Enabled=$true}
-        [PSCustomObject]@{Name="Linkus VoIP";               Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/Linkus-desktop-win-setup.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=600; Enabled=$true}
+        [PSCustomObject]@{Name="CrowdStriker (Anti-Virus)"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/FalconSensor_Windows.exe"; SilentArgs=@("/install","/quiet","/norestart","CID=8777EA0847824F13B27F1DFF7C0A27C4-27","ProvWaitTime=1200000"); Ext=".exe"; IsMSI=$false; TimeoutSeconds=1800; Enabled=$true; UninstallMatch="CrowdStrike"}
+        [PSCustomObject]@{Name="DELL SupportAssist";        Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/DELL.SupportAssistLauncher.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true; UninstallMatch="SupportAssist"}
+        [PSCustomObject]@{Name="Easy Inventory (EasyELGIN)"; Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/EasyELGIN.msi"; SilentArgs=@("/qn","/norestart"); Ext=".msi"; IsMSI=$true; TimeoutSeconds=900; Enabled=$true; UninstallMatch="EasyELGIN"}
+        [PSCustomObject]@{Name="FortiClient VPN";           Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/FortiClientVPNOnlineInstaller.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true; UninstallMatch="FortiClient"}
+        [PSCustomObject]@{Name="HP Support Assistant";      Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/HP.Support.Assistant.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true; UninstallMatch="HP Support Assistant"}
+        [PSCustomObject]@{Name="OCS Inventory Agent";       Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/OcsPackage.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=600; Enabled=$true; UninstallMatch="OCS Inventory"}
+        [PSCustomObject]@{Name="Linkus VoIP";               Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/Linkus-desktop-win-setup.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=600; Enabled=$true; UninstallMatch="Linkus"}
     )
 }
 
@@ -2674,6 +2735,18 @@ $script:XamlHead = @'
                                 <TextBlock Grid.Column="1" Text="Impressao" Style="{StaticResource SidebarNavLabel}"/>
                             </Grid>
                         </Button>
+                        <Button x:Name="NavDeploy" Style="{StaticResource SidebarButton}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource SidebarNavIcon}" Background="#F97316">
+                                    <TextBlock Text="DP" Style="{StaticResource SidebarNavIconText}"/>
+                                </Border>
+                                <TextBlock Grid.Column="1" Text="Deploy" Style="{StaticResource SidebarNavLabel}"/>
+                            </Grid>
+                        </Button>
                         <TextBlock Text="SISTEMA" Style="{StaticResource NavGroupLabel}"/>
                         <Button x:Name="NavDiagnostico" Style="{StaticResource SidebarButton}">
                             <Grid>
@@ -4452,6 +4525,71 @@ $script:XamlPanelsD = @'
                     </ScrollViewer>
                 </Grid>
 
+                <!-- Deploy Remoto -->
+                <Grid x:Name="PanelDeploy" Visibility="Collapsed">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="Deploy Remoto" Foreground="{DynamicResource BrushText}" FontSize="22" FontWeight="Bold" Margin="0,0,0,4"/>
+                    <TextBlock Grid.Row="1" Text="Instala ou desinstala apps do Pacote Extra remotamente via PowerShell Remoting (WinRM). Requer WinRM habilitado e credencial de administrador na maquina alvo." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,14" TextWrapping="Wrap"/>
+                    <ScrollViewer Grid.Row="2">
+                        <StackPanel>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="CREDENCIAL DE ADMINISTRADOR" Foreground="{DynamicResource BrushTextFaint}" FontSize="11" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <StackPanel Margin="0,0,14,0">
+                                            <TextBlock Text="Usuario (DOMINIO\usuario)" FontSize="11" Foreground="{DynamicResource BrushTextMuted}" Margin="0,0,0,4"/>
+                                            <TextBox x:Name="TxtDeployUser" Style="{StaticResource SearchBox}" Width="260"/>
+                                        </StackPanel>
+                                        <StackPanel>
+                                            <TextBlock Text="Senha" FontSize="11" Foreground="{DynamicResource BrushTextMuted}" Margin="0,0,0,4"/>
+                                            <PasswordBox x:Name="PwdDeploy" Width="260" Height="34" Padding="10,0" Background="{DynamicResource BrushInputBg}" BorderBrush="{DynamicResource BrushInputBorder}" BorderThickness="1" Foreground="{DynamicResource BrushText}" VerticalContentAlignment="Center"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                    <TextBlock Text="A senha fica so em memoria enquanto a ferramenta esta aberta - nunca e salva em disco." Foreground="{DynamicResource BrushTextFaint}" FontSize="10.5" Margin="0,8,0,0"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="MAQUINAS ALVO" Foreground="{DynamicResource BrushTextFaint}" FontSize="11" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                        <TextBox x:Name="TxtDeployHostname" Style="{StaticResource SearchBox}" Width="260" Margin="0,0,10,0"/>
+                                        <Button x:Name="BtnDeployAddHost" Content="Adicionar" Width="120" Height="36" Style="{StaticResource CardButton}" Background="{DynamicResource BrushAccent}" Margin="0,0,10,0"/>
+                                        <Button x:Name="BtnDeployScan" Content="Escanear Rede" Width="150" Height="36" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                    </StackPanel>
+                                    <Border Background="{DynamicResource BrushSurfaceAlt}" BorderBrush="{DynamicResource BrushBorder}" BorderThickness="1" CornerRadius="8" Padding="4" MinHeight="60" MaxHeight="240">
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                            <StackPanel x:Name="SpDeployHosts"/>
+                                        </ScrollViewer>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="APPS DO PACOTE EXTRA" Foreground="{DynamicResource BrushTextFaint}" FontSize="11" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <Button x:Name="BtnDeployMarcarTodos" Content="Marcar Todos" Width="120" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" Margin="0,0,8,0"/>
+                                        <Button x:Name="BtnDeployDesmarcarTodos" Content="Desmarcar Todos" Width="130" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                    </StackPanel>
+                                    <StackPanel x:Name="SpDeployApps"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                                        <Button x:Name="BtnDeployInstalar" Content="Instalar nas Selecionadas" Width="220" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushSuccess}" Margin="0,0,10,0"/>
+                                        <Button x:Name="BtnDeployDesinstalar" Content="Desinstalar nas Selecionadas" Width="220" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Text="RESULTADO" Foreground="{DynamicResource BrushTextFaint}" FontSize="11" FontWeight="Bold" Margin="4,6,0,10"/>
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,20">
+                                <ScrollViewer MaxHeight="260">
+                                    <StackPanel x:Name="SpDeployLog"/>
+                                </ScrollViewer>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+
                 <!-- Limpeza e Otimizacao -->
                 <Grid x:Name="PanelLimpeza" Visibility="Collapsed">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
@@ -4606,6 +4744,214 @@ $script:XamlPanelsD = @'
                 </Grid>
 '@
 
+# ==============================================================================
+# DEPLOY REMOTO - instala/desinstala apps do Pacote Extra em outras maquinas
+# via PowerShell Remoting (WinRM). Cada maquina alvo roda como um Job em
+# segundo plano (Invoke-Command bloqueia a thread que chama, sem jeito nativo
+# de fazer polling como Process.HasExited - por isso Job + Wait-JobsResponsive
+# em vez do padrao Invoke-ManagedProcess/Wait-ProcessResponsive usado pro
+# resto do app). Os scriptblocks remotos ($global:DeploySbInstall/Uninstall)
+# sao auto-contidos (sem chamar nenhuma funcao local do script) porque o
+# PowerShell Remoting serializa o texto do scriptblock pra rodar na maquina
+# alvo - funcoes definidas so localmente nao existem la.
+# ==============================================================================
+
+function Get-LocalIPv4Base {
+    try {
+        $ip = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+            Where-Object { $_.IPAddress -ne "127.0.0.1" -and $_.IPAddress -notmatch '^169\.254\.' -and $_.PrefixOrigin -ne "WellKnown" } |
+            Select-Object -First 1
+        if ($ip) {
+            $parts = $ip.IPAddress -split '\.'
+            return ($parts[0..2] -join '.')
+        }
+    } catch {}
+    return $null
+}
+
+function Test-DeployHostOnline {
+    param([Parameter(Mandatory=$true)][string]$Hostname)
+    try { return [bool](Test-Connection -ComputerName $Hostname -Count 1 -Quiet -ErrorAction Stop) } catch { return $false }
+}
+
+# Varredura de rede: pinga a sub-rede /24 da maquina atual em paralelo (Ping
+# assincrono do .NET, nao Test-Connection sequencial - varrer 254 hosts um a
+# um levaria minutos). Roda dentro de um Job proprio (chamado com
+# Wait-JobsResponsive) pra nao travar a UI.
+$global:DeploySbScan = {
+    param($BaseIp)
+    $tasks = foreach ($i in 1..254) {
+        $ip = "$BaseIp.$i"
+        $ping = New-Object System.Net.NetworkInformation.Ping
+        [PSCustomObject]@{ Ip=$ip; Task=$ping.SendPingAsync($ip,300) }
+    }
+    try { [System.Threading.Tasks.Task]::WaitAll(@($tasks.Task)) } catch {}
+    $achados = New-Object System.Collections.ArrayList
+    foreach ($t in $tasks) {
+        try {
+            if ($t.Task.Result.Status -eq 'Success') {
+                $hn = $t.Ip
+                try { $hn = ([System.Net.Dns]::GetHostEntry($t.Ip)).HostName } catch {}
+                [void]$achados.Add([PSCustomObject]@{ Ip=$t.Ip; Hostname=$hn })
+            }
+        } catch {}
+    }
+    return @($achados | Sort-Object Ip)
+}
+
+function Invoke-DeployNetworkScan {
+    $base = Get-LocalIPv4Base
+    if (-not $base) { Show-Warning "Nao foi possivel identificar a sub-rede local."; return @() }
+    $job = Start-Job -ScriptBlock $global:DeploySbScan -ArgumentList $base
+    $timedOut = Wait-JobsResponsive -Jobs @($job) -TimeoutSeconds 120 -BusyTextPrefix ("Escaneando {0}.0/24..." -f $base)
+    if ($timedOut) { Write-Log -Message "[DEPLOY] Timeout no scan de rede." -Level "WARN"; Remove-Job $job -Force -ErrorAction SilentlyContinue; return @() }
+    $out = @(Receive-Job -Job $job -ErrorAction SilentlyContinue)
+    Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+    return $out
+}
+
+# Instala baixando o instalador oficial e rodando com os mesmos SilentArgs do
+# Pacote Extra local. Aspas manuais em argumentos com espaco - Start-Process
+# -ArgumentList NAO cota sozinho (bug real ja encontrado e corrigido no
+# AnyDesk local, mesma protecao aplicada aqui).
+$global:DeploySbInstall = {
+    param($Apps)
+    $results = New-Object System.Collections.ArrayList
+    foreach ($app in $Apps) {
+        $r = [PSCustomObject]@{ Name=$app.Name; Success=$false; Detail="" }
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11
+            $ext  = if ($app.Ext) { $app.Ext } else { ".exe" }
+            $temp = Join-Path $env:TEMP ("elgin_deploy_{0}{1}" -f ([guid]::NewGuid().ToString("N").Substring(0,8)),$ext)
+            $prevProg = $ProgressPreference; $ProgressPreference = "SilentlyContinue"
+            Invoke-WebRequest -Uri $app.Url -OutFile $temp -UseBasicParsing -ErrorAction Stop
+            $ProgressPreference = $prevProg
+
+            $silentArgs = @()
+            if ($app.SilentArgs) { $silentArgs = @($app.SilentArgs | Where-Object { $_ }) }
+            $silentArgs = @($silentArgs | ForEach-Object { if ($_ -match ' ') { [char]34 + $_ + [char]34 } else { $_ } })
+
+            if ($app.IsMSI) {
+                $msiArgs = @("/i",$temp) + $(if ($silentArgs.Count -gt 0) { $silentArgs } else { @("/norestart") })
+                $p = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -Wait -PassThru -ErrorAction Stop
+            } elseif ($silentArgs.Count -gt 0) {
+                $p = Start-Process -FilePath $temp -ArgumentList $silentArgs -Wait -PassThru -ErrorAction Stop
+            } else {
+                $p = Start-Process -FilePath $temp -Wait -PassThru -ErrorAction Stop
+            }
+            Remove-Item $temp -Force -ErrorAction SilentlyContinue
+            $r.Success = ($p.ExitCode -eq 0 -or $p.ExitCode -eq 3010 -or $p.ExitCode -eq 1641)
+            $r.Detail  = "ExitCode $($p.ExitCode)"
+        } catch {
+            $r.Detail = $_.Exception.Message
+        }
+        [void]$results.Add($r)
+    }
+    return $results
+}
+
+# Desinstala procurando o programa no registro de Uninstall pelo termo
+# UninstallMatch (nome "de verdade" registrado pelo instalador, que costuma
+# ser diferente do nome amigavel usado na lista do Pacote Extra) e rodando o
+# UninstallString/QuietUninstallString gravado la - mesmo mecanismo do
+# Desinstalador Seguro local (Get-InstalledProgramsList), reescrito aqui
+# porque scriptblock remoto nao pode chamar funcao definida so localmente.
+$global:DeploySbUninstall = {
+    param($Apps)
+    $results = New-Object System.Collections.ArrayList
+    $paths = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+    foreach ($app in $Apps) {
+        $r = [PSCustomObject]@{ Name=$app.Name; Success=$false; Detail="" }
+        try {
+            $matchTerm = if ($app.UninstallMatch) { $app.UninstallMatch } else { $app.Name }
+            $prog = $null
+            foreach ($p in $paths) {
+                $prog = Get-ItemProperty -Path $p -ErrorAction SilentlyContinue |
+                    Where-Object { $_.DisplayName -and $_.DisplayName -match [regex]::Escape($matchTerm) -and ($_.UninstallString -or $_.QuietUninstallString) } |
+                    Select-Object -First 1
+                if ($prog) { break }
+            }
+            if (-not $prog) {
+                $r.Detail = "Programa nao encontrado nesta maquina (procurado por '$matchTerm')."
+                [void]$results.Add($r)
+                continue
+            }
+            $cmd = if ($prog.QuietUninstallString) { [string]$prog.QuietUninstallString } else { [string]$prog.UninstallString }
+            $proc = Start-Process -FilePath "cmd.exe" -ArgumentList @("/c",$cmd) -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+            $r.Success = ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010)
+            $r.Detail  = "Desinstalado '$($prog.DisplayName)'. ExitCode $($proc.ExitCode)"
+        } catch {
+            $r.Detail = $_.Exception.Message
+        }
+        [void]$results.Add($r)
+    }
+    return $results
+}
+
+# Um Job por maquina (Invoke-Command conecta e roda o scriptblock la dentro);
+# todas as maquinas rodam em paralelo, Wait-JobsResponsive espera todas juntas
+# mostrando quantas ja terminaram. Retorna resultado achatado (uma linha por
+# maquina+app) pra quem chamou desenhar no log da UI.
+function Invoke-DeployAction {
+    param(
+        [ValidateSet("Install","Uninstall")][string]$Action,
+        [Parameter(Mandatory=$true)][array]$Apps,
+        [Parameter(Mandatory=$true)][string[]]$TargetHostnames,
+        [Parameter(Mandatory=$true)][System.Management.Automation.PSCredential]$Credential
+    )
+    $sb = if ($Action -eq "Install") { $global:DeploySbInstall } else { $global:DeploySbUninstall }
+    $appsPayload = @($Apps | ForEach-Object {
+        [PSCustomObject]@{ Name=$_.Name; Url=$_.Url; SilentArgs=@($_.SilentArgs); IsMSI=[bool]$_.IsMSI; Ext=$_.Ext; UninstallMatch=$_.UninstallMatch }
+    })
+
+    $jobs = @()
+    foreach ($h in $TargetHostnames) {
+        # ScriptBlock NAO sobrevive como [scriptblock] ao cruzar pro processo
+        # do Job via -ArgumentList - vira string e quebra na hora de invocar
+        # (testado isoladamente: "not recognized as a name of a cmdlet").
+        # Passa o texto e reconstroi com [scriptblock]::Create() dentro do
+        # job. PSCredential nao tem esse problema, atravessa como objeto real.
+        $j = Start-Job -ScriptBlock {
+            param($Hostname,$Cred,$InnerSbText,$AppsPayload)
+            try {
+                $innerSb = [scriptblock]::Create($InnerSbText)
+                Invoke-Command -ComputerName $Hostname -Credential $Cred -ScriptBlock $innerSb -ArgumentList (,$AppsPayload) -ErrorAction Stop
+            } catch {
+                [PSCustomObject]@{ Name="(conexao)"; Success=$false; Detail=$_.Exception.Message }
+            }
+        } -ArgumentList $h,$Credential,$sb.ToString(),$appsPayload
+        $jobs += [PSCustomObject]@{ Hostname=$h; Job=$j }
+    }
+
+    $verbo = if ($Action -eq "Install") { "Instalando" } else { "Desinstalando" }
+    $timedOut = Wait-JobsResponsive -Jobs @($jobs.Job) -TimeoutSeconds 1200 -BusyTextPrefix ("{0} em {1} maquina(s)..." -f $verbo,$jobs.Count)
+
+    $linhas = New-Object System.Collections.ArrayList
+    foreach ($item in $jobs) {
+        if ($item.Job.State -eq 'Running') {
+            try { Stop-Job $item.Job -ErrorAction SilentlyContinue } catch {}
+            [void]$linhas.Add([PSCustomObject]@{ Hostname=$item.Hostname; AppName="(timeout)"; Success=$false; Detail="Tempo esgotado." })
+            Remove-Job $item.Job -Force -ErrorAction SilentlyContinue
+            continue
+        }
+        $out = @(Receive-Job -Job $item.Job -ErrorAction SilentlyContinue)
+        Remove-Job -Job $item.Job -Force -ErrorAction SilentlyContinue
+        if ($out.Count -eq 0) {
+            [void]$linhas.Add([PSCustomObject]@{ Hostname=$item.Hostname; AppName="(sem resposta)"; Success=$false; Detail="Job nao retornou resultado." })
+            continue
+        }
+        foreach ($r in $out) {
+            [void]$linhas.Add([PSCustomObject]@{ Hostname=$item.Hostname; AppName=$r.Name; Success=[bool]$r.Success; Detail=[string]$r.Detail })
+        }
+    }
+    if ($timedOut) { Write-Log -Message "[DEPLOY] Timeout geral atingido - alguma maquina pode nao ter sido processada." -Level "WARN" }
+    return @($linhas)
+}
+
 function Show-MainWindow {
     $script:MainWindowXaml = $script:XamlHead + $script:XamlPanelsA + $script:XamlPanelsB + $script:XamlPanelsD + $script:XamlPanelsC
     $reader = [System.Xml.XmlNodeReader]::new([xml]$script:MainWindowXaml)
@@ -4657,6 +5003,7 @@ function Show-MainWindow {
         Diagnostico = $window.FindName("PanelDiagnostico")
         Rede      = $window.FindName("PanelRede")
         Impressao = $window.FindName("PanelImpressao")
+        Deploy    = $window.FindName("PanelDeploy")
         Limpeza   = $window.FindName("PanelLimpeza")
         Ferramentas = $window.FindName("PanelFerramentas")
         Logs      = $window.FindName("PanelLogs")
@@ -4668,13 +5015,14 @@ function Show-MainWindow {
         Diagnostico = $window.FindName("NavDiagnostico")
         Rede      = $window.FindName("NavRede")
         Impressao = $window.FindName("NavImpressao")
+        Deploy    = $window.FindName("NavDeploy")
         Limpeza   = $window.FindName("NavLimpeza")
         Ferramentas = $window.FindName("NavFerramentas")
         Logs      = $window.FindName("NavLogs")
     }
     $panelTitles = @{
         Inicio="Inicio"; Checklist="Checklist"; Instalar="Instalar Aplicativos"
-        Diagnostico="Diagnostico"; Rede="Rede"; Impressao="Impressao"; Limpeza="Limpeza e Otimizacao"
+        Diagnostico="Diagnostico"; Rede="Rede"; Impressao="Impressao"; Deploy="Deploy Remoto"; Limpeza="Limpeza e Otimizacao"
         Ferramentas="Ferramentas"; Logs="Logs"
     }
     # Scriptblock (nao function aninhada) - funcoes definidas dentro de outra
@@ -4712,6 +5060,7 @@ function Show-MainWindow {
         @{ Key="Diagnostico"; Title="Diagnostico";           Desc="Relatorio do sistema, ativacao do Windows/Office e boot";     Categoria="Diagnostico";   Mono="DG"; Cor="#2563EB" }
         @{ Key="Rede";        Title="Rede";                  Desc="DNS, IP, Winsock, Wi-Fi, conexoes e unidades mapeadas";       Categoria="Diagnostico";   Mono="RD"; Cor="#0EA5E9" }
         @{ Key="Impressao";   Title="Impressao";             Desc="Spooler, monitor SNMP e gerenciamento de impressoras";        Categoria="Equipamentos";  Mono="IP"; Cor="#7C6FFA" }
+        @{ Key="Deploy";      Title="Deploy Remoto";         Desc="Instala/desinstala Pacote Extra remotamente via WinRM";       Categoria="Rede";          Mono="DP"; Cor="#F97316" }
         @{ Key="Limpeza";     Title="Limpeza e Otimizacao";  Desc="Limpeza de arquivos, reparos do Windows e desempenho";        Categoria="Manutencao";    Mono="LO"; Cor="#14B8A6" }
         @{ Key="Ferramentas"; Title="Ferramentas";           Desc="Desinstalador seguro, impressao e configuracoes da ferramenta"; Categoria="Avancado";      Mono="FR"; Cor="#EF4444" }
         @{ Key="Logs";        Title="Logs";                  Desc="Historico de acoes e erros da ferramenta";                    Categoria="Historico";     Mono="LG"; Cor="#6B7280" }
@@ -5317,6 +5666,167 @@ function Show-MainWindow {
     $window.FindName("BtnConexoesPortas").Add_Click({ Show-TextResultDialog -Title "Conexoes / Portas" -Text (Get-NetworkConnectionsInfo) }.GetNewClosure())
     $window.FindName("BtnMapearUnidade").Add_Click({ Show-MapNetworkDriveDialog }.GetNewClosure())
     $window.FindName("BtnVerUnidadesMapeadas").Add_Click({ Show-TextResultDialog -Title "Unidades Mapeadas" -Text (Get-MappedDrivesInfo) }.GetNewClosure())
+
+    # ---- Deploy Remoto ----
+    $txtDeployUser     = $window.FindName("TxtDeployUser")
+    $pwdDeploy         = $window.FindName("PwdDeploy")
+    $txtDeployHostname = $window.FindName("TxtDeployHostname")
+    $spDeployHosts     = $window.FindName("SpDeployHosts")
+    $spDeployApps      = $window.FindName("SpDeployApps")
+    $spDeployLog       = $window.FindName("SpDeployLog")
+
+    $global:DeployAppCheckboxes  = @()
+    foreach ($app in $global:ExtraAppsList) {
+        $cb = New-Object System.Windows.Controls.CheckBox
+        $cb.Content = $app.Name
+        $cb.Tag = $app
+        [void]$spDeployApps.Children.Add($cb)
+        $global:DeployAppCheckboxes += $cb
+    }
+    $window.FindName("BtnDeployMarcarTodos").Add_Click({ foreach ($cb in $global:DeployAppCheckboxes) { $cb.IsChecked = $true } }.GetNewClosure())
+    $window.FindName("BtnDeployDesmarcarTodos").Add_Click({ foreach ($cb in $global:DeployAppCheckboxes) { $cb.IsChecked = $false } }.GetNewClosure())
+
+    $AddDeployLogLine = {
+        param([string]$Text,[string]$Level="INFO")
+        $tb = New-Object System.Windows.Controls.TextBlock
+        $tb.Text = $Text
+        $tb.TextWrapping = "Wrap"
+        $tb.FontSize = 12
+        $tb.Margin = "0,2,0,2"
+        $corKey = switch ($Level) { "SUCCESS" { "BrushSuccess" } "ERROR" { "BrushDanger" } "WARN" { "BrushWarning" } default { "BrushText" } }
+        $tb.Foreground = Get-ThemeBrush $corKey
+        [void]$spDeployLog.Children.Add($tb)
+    }.GetNewClosure()
+
+    # Lista paralela de checkboxes das maquinas (mesmo padrao do
+    # $global:DeployAppCheckboxes/$global:ExtraCheckboxes) - evita indexar
+    # Children[N] do Grid de cada linha pra achar o checkbox de volta.
+    $global:DeployHostCheckboxes = @()
+    $RefreshDeployHosts = {
+        $spDeployHosts.Children.Clear()
+        $global:DeployHostCheckboxes = @()
+        foreach ($t in @($global:DeployTargets)) {
+            $row = New-Object System.Windows.Controls.Grid
+            $row.Margin = "0,4,0,4"
+            $c0 = New-Object System.Windows.Controls.ColumnDefinition; $c0.Width = "Auto"
+            $c1 = New-Object System.Windows.Controls.ColumnDefinition
+            $c2 = New-Object System.Windows.Controls.ColumnDefinition; $c2.Width = "Auto"
+            $c3 = New-Object System.Windows.Controls.ColumnDefinition; $c3.Width = "Auto"
+            [void]$row.ColumnDefinitions.Add($c0); [void]$row.ColumnDefinitions.Add($c1)
+            [void]$row.ColumnDefinitions.Add($c2); [void]$row.ColumnDefinitions.Add($c3)
+
+            $cb = New-Object System.Windows.Controls.CheckBox
+            $cb.IsChecked = $true
+            $cb.Tag = $t.Hostname
+            $cb.VerticalAlignment = "Center"
+            [System.Windows.Controls.Grid]::SetColumn($cb,0)
+            [void]$row.Children.Add($cb)
+            $global:DeployHostCheckboxes += $cb
+
+            $txtHost = New-Object System.Windows.Controls.TextBlock
+            $txtHost.Text = $t.Hostname
+            $txtHost.Foreground = Get-ThemeBrush "BrushText"
+            $txtHost.VerticalAlignment = "Center"
+            $txtHost.Margin = "8,0,0,0"
+            [System.Windows.Controls.Grid]::SetColumn($txtHost,1)
+            [void]$row.Children.Add($txtHost)
+
+            $txtStat = New-Object System.Windows.Controls.TextBlock
+            $txtStat.Text = if ($t.Online) { "Online" } else { "Offline" }
+            $txtStat.Foreground = Get-ThemeBrush $(if ($t.Online) { "BrushSuccess" } else { "BrushDanger" })
+            $txtStat.FontSize = 11
+            $txtStat.VerticalAlignment = "Center"
+            $txtStat.Margin = "10,0,10,0"
+            [System.Windows.Controls.Grid]::SetColumn($txtStat,2)
+            [void]$row.Children.Add($txtStat)
+
+            $btnDel = New-Object System.Windows.Controls.Button
+            $btnDel.Content = "Remover"
+            $btnDel.FontSize = 10
+            $btnDel.Height = 24
+            $btnDel.Padding = "8,0"
+            $btnDel.Background = Get-ThemeBrush "BrushBorder"
+            $btnDel.Foreground = Get-ThemeBrush "BrushText"
+            $btnDel.BorderThickness = 0
+            $btnDel.Cursor = "Hand"
+            $btnDel.Tag = $t.Hostname
+            # Usa $this.Tag (nao uma variavel capturada do loop) - testado
+            # isoladamente antes de aplicar: variavel local de loop capturada
+            # por uma closure criada DENTRO da execucao de outra closure
+            # (este $RefreshDeployHosts) e a mesma armadilha ja documentada
+            # no Checklist. $this sempre resolve pro botao que foi clicado.
+            $btnDel.Add_Click({
+                $alvo = $global:DeployTargets | Where-Object { $_.Hostname -eq $this.Tag } | Select-Object -First 1
+                if ($alvo) { [void]$global:DeployTargets.Remove($alvo) }
+                & $RefreshDeployHosts
+            }.GetNewClosure())
+            [System.Windows.Controls.Grid]::SetColumn($btnDel,3)
+            [void]$row.Children.Add($btnDel)
+
+            [void]$spDeployHosts.Children.Add($row)
+        }
+    }.GetNewClosure()
+
+    $window.FindName("BtnDeployAddHost").Add_Click({
+        $hn = $txtDeployHostname.Text.Trim()
+        if ([string]::IsNullOrWhiteSpace($hn)) { return }
+        if (@($global:DeployTargets | Where-Object { $_.Hostname -eq $hn }).Count -gt 0) { Show-Warning "Essa maquina ja esta na lista."; return }
+        $job = Start-Job -ScriptBlock { param($h) try { [bool](Test-Connection -ComputerName $h -Count 1 -Quiet -ErrorAction Stop) } catch { $false } } -ArgumentList $hn
+        Wait-JobsResponsive -Jobs @($job) -TimeoutSeconds 20 -BusyTextPrefix ("Verificando {0}..." -f $hn) | Out-Null
+        $online = $false
+        try { $online = [bool](Receive-Job -Job $job -ErrorAction SilentlyContinue) } catch {}
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+        [void]$global:DeployTargets.Add([PSCustomObject]@{ Hostname=$hn; Online=$online })
+        $txtDeployHostname.Text = ""
+        & $RefreshDeployHosts
+        if (-not $online) { Show-Warning ("'{0}' nao respondeu ao ping. Foi adicionada mesmo assim, mas o deploy provavelmente vai falhar nela." -f $hn) }
+    }.GetNewClosure())
+
+    $window.FindName("BtnDeployScan").Add_Click({
+        $achados = @(Invoke-DeployNetworkScan)
+        if ($achados.Count -eq 0) { Show-Info "Nenhuma maquina encontrada na sub-rede local (ou nao foi possivel identificar a sub-rede)."; return }
+        $novos = 0
+        foreach ($a in $achados) {
+            $nome = if ($a.Hostname -and $a.Hostname -ne $a.Ip) { $a.Hostname } else { $a.Ip }
+            if (@($global:DeployTargets | Where-Object { $_.Hostname -eq $nome -or $_.Hostname -eq $a.Ip }).Count -eq 0) {
+                [void]$global:DeployTargets.Add([PSCustomObject]@{ Hostname=$nome; Online=$true })
+                $novos++
+            }
+        }
+        & $RefreshDeployHosts
+        Show-Info ("Scan concluido: {0} maquina(s) respondendo, {1} nova(s) adicionada(s) a lista." -f $achados.Count,$novos)
+    }.GetNewClosure())
+
+    $RunDeployAction = {
+        param([string]$Action)
+        if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
+        $user = $txtDeployUser.Text.Trim()
+        $secure = $pwdDeploy.SecurePassword
+        if ([string]::IsNullOrWhiteSpace($user) -or $secure.Length -eq 0) { Show-Warning "Informe usuario e senha de administrador."; return }
+        $apps = @($global:DeployAppCheckboxes | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag })
+        if ($apps.Count -eq 0) { Show-Warning "Selecione ao menos um app do Pacote Extra."; return }
+        $alvos = @($global:DeployHostCheckboxes | Where-Object { $_.IsChecked } | ForEach-Object { [string]$_.Tag })
+        if ($alvos.Count -eq 0) { Show-Warning "Selecione ao menos uma maquina."; return }
+
+        $verbo = if ($Action -eq "Install") { "instalar" } else { "desinstalar" }
+        $listaApps = ($apps | ForEach-Object { $_.Name }) -join ", "
+        $listaHosts = $alvos -join ", "
+        if (-not (Confirm-Action ("Isso vai {0}:`n{1}`n`nNas maquinas:`n{2}`n`nContinuar?" -f $verbo,$listaApps,$listaHosts) "Deploy Remoto")) { return }
+
+        $cred = New-Object System.Management.Automation.PSCredential($user,$secure)
+        & $AddDeployLogLine ("--- Iniciando {0} de {1} app(s) em {2} maquina(s) ---" -f $verbo,$apps.Count,$alvos.Count) "INFO"
+        $resultados = @(Invoke-DeployAction -Action $Action -Apps $apps -TargetHostnames $alvos -Credential $cred)
+        foreach ($r in $resultados) {
+            $nivel = if ($r.Success) { "SUCCESS" } else { "ERROR" }
+            & $AddDeployLogLine ("{0} - {1}: {2}" -f $r.Hostname,$r.AppName,$r.Detail) $nivel
+        }
+        & $AddDeployLogLine "--- Deploy finalizado ---" "INFO"
+        Show-Info "Deploy finalizado. Veja o resultado detalhado na secao RESULTADO."
+    }.GetNewClosure()
+    $window.FindName("BtnDeployInstalar").Add_Click({ & $RunDeployAction -Action "Install" }.GetNewClosure())
+    $window.FindName("BtnDeployDesinstalar").Add_Click({ & $RunDeployAction -Action "Uninstall" }.GetNewClosure())
+
+    & $RefreshDeployHosts
 
     $global:PrinterRefreshTimer = New-Object System.Windows.Threading.DispatcherTimer
     $global:PrinterRefreshTimer.Add_Tick({
