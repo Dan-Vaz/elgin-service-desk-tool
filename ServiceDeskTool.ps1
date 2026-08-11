@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.17"
+$global:AppVersion    = "3.18"
 $global:SchemaVersion = 5
 $global:ExtraSchemaVersion = 6
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
@@ -4710,15 +4710,21 @@ $script:XamlPanelsD = @'
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
-                            <!-- DESINSTALADOR -->
-                            <Border Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,0,0,12" Style="{StaticResource Card}">
+                            <!-- DESINSTALADOR SEGURO -->
+                            <Border Grid.Row="0" Grid.Column="0" Margin="0,0,5,12" Style="{StaticResource Card}">
                                 <StackPanel>
-                                    <TextBlock Text="DESINSTALADOR" Foreground="{DynamicResource BrushDanger}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <TextBlock Text="DESINSTALADOR SEGURO" Foreground="{DynamicResource BrushDanger}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
                                     <TextBlock Text="Desinstala o programa e depois procura residuos (pastas e chaves de registro) deixados para tras, igual o Revo Uninstaller - voce revisa e escolhe o que apagar." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
-                                    <StackPanel Orientation="Horizontal">
-                                        <Button x:Name="BtnUninstaller" Content="Desinstalador Seguro" Height="38" Width="240" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}" Margin="0,0,10,0"/>
-                                        <Button x:Name="BtnDesinstalarBitdefender" Content="Desinstalador do Bitdefender" Height="38" Width="240" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}"/>
-                                    </StackPanel>
+                                    <Button x:Name="BtnUninstaller" Content="Desinstalador Seguro" Height="38" Width="240" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- DESINSTALADOR DO BITDEFENDER -->
+                            <Border Grid.Row="0" Grid.Column="1" Margin="5,0,0,12" Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="DESINSTALADOR DO BITDEFENDER" Foreground="{DynamicResource BrushWarning}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <TextBlock Text="Baixa e roda o desinstalador oficial da Bitdefender (BEST Uninstall Tool) com os parametros de desinstalacao silenciosa - ferramenta separada, nao passa pelo Desinstalador Seguro." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <Button x:Name="BtnDesinstalarBitdefender" Content="Desinstalador do Bitdefender" Height="38" Width="240" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushWarning}"/>
                                 </StackPanel>
                             </Border>
 
