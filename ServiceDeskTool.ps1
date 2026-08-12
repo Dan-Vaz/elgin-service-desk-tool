@@ -38,9 +38,9 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.20"
+$global:AppVersion    = "3.21"
 $global:SchemaVersion = 5
-$global:ExtraSchemaVersion = 6
+$global:ExtraSchemaVersion = 7
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
 $global:AssetsPath    = Join-Path $global:BasePath  "Assets"
@@ -941,10 +941,9 @@ function Update-LegacyDefaultListIfNeeded {
 # embutida no script (mesmo padrao do Get-DefaultAppList da Lista Padrao).
 function Get-DefaultExtraAppList {
     return @(
-        [PSCustomObject]@{Name="CrowdStriker (Anti-Virus)"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/FalconSensor_Windows.exe"; SilentArgs=@("/install","/quiet","/norestart","CID=8777EA0847824F13B27F1DFF7C0A27C4-27","ProvWaitTime=1200000"); Ext=".exe"; IsMSI=$false; TimeoutSeconds=1800; Enabled=$true; UninstallMatch="CrowdStrike"}
+        [PSCustomObject]@{Name="CrowdStrike (Anti-Virus)"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/FalconSensor_Windows.exe"; SilentArgs=@("/install","/quiet","/norestart","CID=8777EA0847824F13B27F1DFF7C0A27C4-27","ProvWaitTime=1200000"); Ext=".exe"; IsMSI=$false; TimeoutSeconds=1800; Enabled=$true; UninstallMatch="CrowdStrike"}
         [PSCustomObject]@{Name="DELL SupportAssist";        Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/DELL.SupportAssistLauncher.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true; UninstallMatch="SupportAssist"}
         [PSCustomObject]@{Name="Easy Inventory (EasyELGIN)"; Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/EasyELGIN.msi"; SilentArgs=@("/qn","/norestart"); Ext=".msi"; IsMSI=$true; TimeoutSeconds=900; Enabled=$true; UninstallMatch="EasyELGIN"}
-        [PSCustomObject]@{Name="FortiClient VPN";           Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/FortiClientVPNOnlineInstaller.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true; UninstallMatch="FortiClient"}
         [PSCustomObject]@{Name="HP Support Assistant";      Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/HP.Support.Assistant.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true; UninstallMatch="HP Support Assistant"}
         [PSCustomObject]@{Name="OCS Inventory Agent";       Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/OcsPackage.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=600; Enabled=$true; UninstallMatch="OCS Inventory"}
         [PSCustomObject]@{Name="Linkus VoIP";               Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/Linkus-desktop-win-setup.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=600; Enabled=$true; UninstallMatch="Linkus"}
@@ -1059,6 +1058,37 @@ function Show-AddExtraAppDialog {
     $btnCancelar.Add_Click({ $dlg.DialogResult = $false; $dlg.Close() }.GetNewClosure())
     [void]$dlg.ShowDialog()
     return $global:ExtraDialogResult
+}
+
+# Versoes antigas do Easy Inventory foram instaladas via Inno Setup (nao
+# MSI) e deixam uma entrada de desinstalacao nesse formato (chave com GUID
+# + sufixo "_is1", Publisher "Easy2W"). O instalador MSI atual
+# (EasyELGIN.msi) tem uma custom action que tenta ler o UninstallString
+# dessa entrada antiga e falha com ExitCode 1603 quando encontra esse
+# formato incompativel - reproduzido de verdade com log detalhado do
+# msiexec (/l*v): "-- CUSTOM ACTION -- ModifyRegistry: Error getting
+# UninstallString value from registry." Como praticamente toda maquina da
+# empresa ja tem essa versao antiga instalada, isso quebrava o instalador
+# em quase todo lugar ("nao consigo instalar de forma alguma"). So remove a
+# entrada de registro (nao mexe em arquivos/servico do agente antigo) antes
+# de instalar via MSI.
+function Remove-LegacyEasyElginRegistration {
+    $paths = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+    foreach ($p in $paths) {
+        Get-ItemProperty -Path $p -ErrorAction SilentlyContinue |
+            Where-Object { $_.Publisher -eq "Easy2W" -or $_.DisplayName -match "^Easy2W" } |
+            ForEach-Object {
+                try {
+                    Remove-Item -Path $_.PSPath -Recurse -Force -ErrorAction Stop
+                    Write-Log -Message ("[EXTRA] Removida entrada de registro legada do Easy Inventory (Inno Setup): {0}" -f $_.DisplayName) -Level "INFO"
+                } catch {
+                    Write-Log -Message ("[EXTRA] Falha ao remover entrada legada do Easy Inventory: {0}" -f $_.Exception.Message) -Level "WARN"
+                }
+            }
+    }
 }
 
 # Baixa o instalador (cascata de 4 metodos, do mais compativel com proxy
@@ -2999,7 +3029,7 @@ $script:XamlPanelsA = @'
 
                                 <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource Card}" Margin="7,0,0,0" VerticalAlignment="Top">
                                     <StackPanel>
-                                        <TextBlock Text="Instaladores diretos hospedados fora do winget/choco (FortiClient, EasyELGIN, etc.)." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                                        <TextBlock Text="Instaladores diretos hospedados fora do winget/choco (CrowdStrike, EasyELGIN, etc.)." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,10" TextWrapping="Wrap"/>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                                             <Button x:Name="BtnMarcarTodosExtra" Content="Marcar Todos" Width="120" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" Margin="0,0,8,0"/>
                                             <Button x:Name="BtnDesmarcarTodosExtra" Content="Desmarcar Todos" Width="130" Height="28" FontSize="11" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
@@ -5603,6 +5633,7 @@ function Show-MainWindow {
             foreach ($app in $selecionados) {
                 $i++
                 if ($txtOv -ne $null) { $txtOv.Text = "Instalando {0}/{1}: {2}..." -f $i,$selecionados.Count,$app.Name; $ov.Dispatcher.Invoke([System.Action]{}, [System.Windows.Threading.DispatcherPriority]::Render) }
+                if ($app.Name -eq "Easy Inventory (EasyELGIN)") { Remove-LegacyEasyElginRegistration }
                 $results[$app.Name] = Install-DirectApp -App $app
             }
         } finally { Close-BusyOverlay -Overlay $ov }
