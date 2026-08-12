@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.25"
+$global:AppVersion    = "3.26"
 $global:SchemaVersion = 5
 $global:ExtraSchemaVersion = 8
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
@@ -3977,18 +3977,24 @@ function Invoke-BitdefenderUninstall {
 $script:LapsHostnameDialogXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Pegar Senha do LAPS" Height="220" Width="400"
+        Title="Pegar Senha do LAPS" Height="360" Width="420"
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
         Background="{DynamicResource BrushSurface}">
     <Grid Margin="20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/><RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <TextBlock Grid.Row="0" Text="Consulta de Senha LAPS" Foreground="{DynamicResource BrushText}" FontWeight="Bold"/>
         <TextBlock Grid.Row="1" Text="Informe o hostname do computador:" Foreground="{DynamicResource BrushTextMuted}" FontSize="11" Margin="0,4,0,14"/>
         <TextBox x:Name="TxtLapsHostname" Grid.Row="2" Height="30" Padding="6,4" VerticalAlignment="Top" Background="{DynamicResource BrushInputBg}" Foreground="{DynamicResource BrushText}" BorderBrush="{DynamicResource BrushInputBorder}"/>
-        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+        <TextBlock Grid.Row="3" Text="Credencial (opcional - so preencha se a conta usada pra elevar a ferramenta no UAC nao tiver permissao de leitura do LAPS no AD):" Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,14,0,4"/>
+        <TextBox x:Name="TxtLapsUser" Grid.Row="4" Height="30" Padding="6,4" Text="DOMINIO\usuario" Foreground="{DynamicResource BrushTextFaint}" Background="{DynamicResource BrushInputBg}" BorderBrush="{DynamicResource BrushInputBorder}" Margin="0,0,0,8"/>
+        <PasswordBox x:Name="PwdLaps" Grid.Row="5" Height="30" Padding="6,4" Background="{DynamicResource BrushInputBg}" Foreground="{DynamicResource BrushText}" BorderBrush="{DynamicResource BrushInputBorder}"/>
+        <StackPanel Grid.Row="8" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
             <Button x:Name="BtnCancelar" Content="Cancelar" Width="100" Height="34" Margin="0,0,10,0" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" BorderThickness="0"/>
             <Button x:Name="BtnConsultar" Content="Consultar" Width="120" Height="34" Background="{DynamicResource BrushAccent}" Foreground="White" BorderThickness="0" FontWeight="Bold"/>
         </StackPanel>
@@ -4003,11 +4009,23 @@ function Show-LapsHostnameDialog {
     Set-DialogTheme -Dialog $dlg
 
     $txtHost = $dlg.FindName("TxtLapsHostname")
+    $txtUser = $dlg.FindName("TxtLapsUser")
+    $pwdBox  = $dlg.FindName("PwdLaps")
+    $txtUser.Add_GotFocus({ if ($txtUser.Text -eq "DOMINIO\usuario") { $txtUser.Text = "" } }.GetNewClosure())
+    $txtUser.Add_LostFocus({ if ([string]::IsNullOrWhiteSpace($txtUser.Text)) { $txtUser.Text = "DOMINIO\usuario" } }.GetNewClosure())
+
     $global:LapsHostnameDialogResult = $null
     $dlg.FindName("BtnConsultar").Add_Click({
         $h = $txtHost.Text.Trim()
         if ([string]::IsNullOrWhiteSpace($h)) { Show-Warning "Informe o hostname."; return }
-        $global:LapsHostnameDialogResult = $h
+        $user = $txtUser.Text.Trim()
+        if ($user -eq "DOMINIO\usuario") { $user = "" }
+        $cred = $null
+        if (-not [string]::IsNullOrWhiteSpace($user)) {
+            if ($pwdBox.SecurePassword.Length -eq 0) { Show-Warning "Informe a senha da credencial, ou deixe usuario e senha em branco pra usar a sessao atual."; return }
+            $cred = New-Object System.Management.Automation.PSCredential($user,$pwdBox.SecurePassword)
+        }
+        $global:LapsHostnameDialogResult = [PSCustomObject]@{ Hostname=$h; Credential=$cred }
         $dlg.DialogResult = $true
         $dlg.Close()
     }.GetNewClosure())
@@ -4017,12 +4035,25 @@ function Show-LapsHostnameDialog {
 }
 
 function Invoke-LapsPasswordLookup {
-    $hostname = Show-LapsHostnameDialog
-    if (-not $hostname) { return }
+    $pedido = Show-LapsHostnameDialog
+    if (-not $pedido) { return }
+    $hostname = $pedido.Hostname
     try {
         Set-Status ("Consultando senha LAPS para {0}..." -f $hostname)
         Import-Module -Name LAPS -ErrorAction Stop
-        $lapsInfo = Get-LapsADPassword -Identity $hostname -AsPlainText -ErrorAction Stop
+        # -Credential opcional: a ferramenta se autoeleva via UAC (qualquer
+        # feature que precise de Administrador), e se o tecnico usar uma
+        # conta diferente da propria no prompt do UAC, a sessao inteira
+        # passa a rodar com aquela identidade - se essa conta nao tiver
+        # delegacao de leitura do LAPS no AD, a consulta falha com "A
+        # credencial fornecida e invalida" mesmo a conta pessoal do tecnico
+        # tendo permissao (reproduzido de verdade: funciona direto com a
+        # sessao normal do usuario, so falha quando roda dentro do processo
+        # elevado com outra identidade). Passar -Credential explicita
+        # contorna isso sem exigir rodar a ferramenta inteira sem elevar.
+        $lapsParams = @{ Identity=$hostname; AsPlainText=$true; ErrorAction="Stop" }
+        if ($pedido.Credential) { $lapsParams["Credential"] = $pedido.Credential }
+        $lapsInfo = Get-LapsADPassword @lapsParams
         if (-not $lapsInfo) {
             Show-Warning ("Nao foi possivel recuperar a senha LAPS para '{0}'. Verifique o nome do computador e suas permissoes." -f $hostname)
             return
