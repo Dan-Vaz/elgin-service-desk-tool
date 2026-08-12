@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.22"
+$global:AppVersion    = "3.23"
 $global:SchemaVersion = 5
 $global:ExtraSchemaVersion = 8
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
@@ -66,12 +66,14 @@ $global:RemoveWindowsAIUrl = "https://raw.githubusercontent.com/zoicware/RemoveW
 # hash does not match" - o instalador oficial (download.anydesk.com/AnyDesk.exe)
 # e auto-atualizavel e o hash muda antes do manifesto do winget-pkgs ser
 # atualizado. Por isso o AnyDesk usa download direto (mesmo padrao do Chrome),
-# nao winget/choco. A senha de acesso nao supervisionado e definida via
-# "AnyDesk.exe --set-password" com a senha passada por STDIN (nunca como
-# argumento de linha de comando - e assim que a AnyDesk documenta, evita a
-# senha aparecer em texto puro no Gerenciador de Tarefas/Process Explorer).
+# nao winget/choco.
+# NAO configura mais a senha de acesso nao supervisionado automaticamente
+# (removido - "AnyDesk.exe --set-password" via linha de comando e uma
+# assinatura comportamental classica de deteccao de EDR pra ferramentas de
+# acesso remoto, e provavelmente foi o gatilho do CrowdStrike Falcon
+# passando a bloquear a propria ferramenta na abertura. Configurar a senha
+# manualmente quando precisar.
 $global:AnyDeskDownloadUrl        = "https://download.anydesk.com/AnyDesk.exe"
-$global:AnyDeskUnattendedPassword = '$uP0rt&__22'
 
 # Desinstalador oficial do Bitdefender GravityZone (BEST Uninstall Tool).
 $global:BitdefenderUninstallUrl  = "https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/BEST_uninstallTool.exe"
@@ -1261,45 +1263,6 @@ function Get-AnyDeskExePath {
     return $null
 }
 
-# "--set-password" precisa da senha via STDIN (nao como argumento de linha de
-# comando - e a forma documentada pela AnyDesk, evita expor a senha em texto
-# puro no Gerenciador de Tarefas/Process Explorer enquanto o comando roda).
-# Usa Wait-ProcessResponsive (nao WaitForExit sincrono) para nao travar a UI.
-function Set-AnyDeskUnattendedPassword {
-    param([Parameter(Mandatory=$true)][string]$ExePath)
-    $proc = $null
-    try {
-        Set-Status "Configurando senha de acesso nao supervisionado do AnyDesk..."
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName              = $ExePath
-        $psi.Arguments             = "--set-password"
-        $psi.UseShellExecute       = $false
-        $psi.RedirectStandardInput = $true
-        $psi.CreateNoWindow        = $true
-        $proc = New-Object System.Diagnostics.Process
-        $proc.StartInfo = $psi
-        [void]$proc.Start()
-        $proc.StandardInput.WriteLine($global:AnyDeskUnattendedPassword)
-        $proc.StandardInput.Close()
-
-        $timedOut = Wait-ProcessResponsive -Process $proc -TimeoutSeconds 20 -BusyText "Configurando senha do AnyDesk..."
-        if ($timedOut) {
-            try { $proc.Kill() } catch {}
-            Write-Log -Message "[INSTALL] Timeout ao definir senha do AnyDesk." -Level "WARN"
-            return $true
-        }
-        $exitCode = try { $proc.ExitCode } catch { -1 }
-        if ($exitCode -eq 0) { Write-Log -Message "[INSTALL] Senha de acesso nao supervisionado do AnyDesk configurada." -Level "SUCCESS" }
-        else { Write-Log -Message ("[INSTALL] AnyDesk --set-password saiu com codigo {0}." -f $exitCode) -Level "WARN" }
-        return $true
-    } catch {
-        Write-Log -Message ("[INSTALL] Falha ao configurar senha do AnyDesk: {0}" -f $_.Exception.Message) -Level "WARN"
-        return $true
-    } finally {
-        if ($proc -ne $null) { try { $proc.Dispose() } catch {} }
-    }
-}
-
 # O "--silent" do instalador da AnyDesk registra o servico e o item no
 # Painel de Controle, mas de proposito NAO cria atalho nenhum (Area de
 # Trabalho/Menu Iniciar) - confirmado apos instalacao real numa maquina de
@@ -1341,11 +1304,11 @@ function Install-AnyDeskDirect {
         # aqui. Reinstalar por cima faz o proprio instalador da AnyDesk
         # recusar (mostra "ja existe uma versao mais nova instalada" e nao
         # faz nada) - reproduzido manualmente com o mesmo .exe baixado por
-        # este script. So garantimos a senha e os atalhos (idempotente -
-        # nao tem problema recriar se ja existirem).
-        Write-Log -Message "[INSTALL] AnyDesk ja instalado (se auto-atualiza sozinho). Configurando senha de acesso nao supervisionado." -Level "INFO"
+        # este script. So garantimos os atalhos (idempotente - nao tem
+        # problema recriar se ja existirem).
+        Write-Log -Message "[INSTALL] AnyDesk ja instalado (se auto-atualiza sozinho)." -Level "INFO"
         New-AnyDeskShortcuts -ExePath $exePath
-        return (Set-AnyDeskUnattendedPassword -ExePath $exePath)
+        return $true
     }
 
     # AnyDesk.exe nao encontrado em Program Files, mas se a maquina ja teve
@@ -1369,7 +1332,7 @@ function Install-AnyDeskDirect {
         return $false
     }
     New-AnyDeskShortcuts -ExePath $exePath
-    return (Set-AnyDeskUnattendedPassword -ExePath $exePath)
+    return $true
 }
 
 # ---- MICROSOFT OFFICE (Microsoft 365 Apps for enterprise) ----
