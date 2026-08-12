@@ -38,9 +38,9 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.21"
+$global:AppVersion    = "3.22"
 $global:SchemaVersion = 5
-$global:ExtraSchemaVersion = 7
+$global:ExtraSchemaVersion = 8
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
 $global:AssetsPath    = Join-Path $global:BasePath  "Assets"
@@ -943,7 +943,14 @@ function Get-DefaultExtraAppList {
     return @(
         [PSCustomObject]@{Name="CrowdStrike (Anti-Virus)"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/FalconSensor_Windows.exe"; SilentArgs=@("/install","/quiet","/norestart","CID=8777EA0847824F13B27F1DFF7C0A27C4-27","ProvWaitTime=1200000"); Ext=".exe"; IsMSI=$false; TimeoutSeconds=1800; Enabled=$true; UninstallMatch="CrowdStrike"}
         [PSCustomObject]@{Name="DELL SupportAssist";        Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/DELL.SupportAssistLauncher.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true; UninstallMatch="SupportAssist"}
-        [PSCustomObject]@{Name="Easy Inventory (EasyELGIN)"; Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/EasyELGIN.msi"; SilentArgs=@("/qn","/norestart"); Ext=".msi"; IsMSI=$true; TimeoutSeconds=900; Enabled=$true; UninstallMatch="EasyELGIN"}
+        # Sem /qn de proposito: numa maquina que nunca teve o EasyELGIN
+        # instalado, a instalacao falha mesmo sem o conflito de registro do
+        # Inno Setup antigo (causa diferente, ainda nao diagnosticada) - e
+        # com /qn o erro real fica invisivel (mesmo problema ja visto no
+        # log do msiexec). Roda com a UI completa do instalador pra dar pra
+        # ver o que acontece e ler a mensagem de erro de verdade. So
+        # "/norestart" pra nao reiniciar a maquina sozinho.
+        [PSCustomObject]@{Name="Easy Inventory (EasyELGIN)"; Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/EasyELGIN.msi"; SilentArgs=@(); Ext=".msi"; IsMSI=$true; TimeoutSeconds=900; Enabled=$true; UninstallMatch="EasyELGIN"}
         [PSCustomObject]@{Name="HP Support Assistant";      Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/HP.Support.Assistant.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true; UninstallMatch="HP Support Assistant"}
         [PSCustomObject]@{Name="OCS Inventory Agent";       Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/OcsPackage.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=600; Enabled=$true; UninstallMatch="OCS Inventory"}
         [PSCustomObject]@{Name="Linkus VoIP";               Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/Linkus-desktop-win-setup.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=600; Enabled=$true; UninstallMatch="Linkus"}
