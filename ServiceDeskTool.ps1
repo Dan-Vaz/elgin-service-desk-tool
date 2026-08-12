@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.22"
+$global:AppVersion    = "3.24"
 $global:SchemaVersion = 5
 $global:ExtraSchemaVersion = 8
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
