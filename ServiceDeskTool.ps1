@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.26"
+$global:AppVersion    = "3.27"
 $global:SchemaVersion = 5
 $global:ExtraSchemaVersion = 8
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
@@ -57,11 +57,6 @@ $global:IconFile      = Join-Path $global:AssetsPath "app-elgin.ico"
 $global:LogoUrl       = "https://i.ibb.co/XfXbR88H/Logo.png"
 $global:FormIcon      = $null
 
-# URL do RemoveWindowsAI fixada num commit especifico (nao "main") para reduzir
-# risco de supply chain: se o repositorio de terceiro for comprometido depois
-# deste commit, esta ferramenta continua executando so o codigo ja auditado.
-$global:RemoveWindowsAIUrl = "https://raw.githubusercontent.com/zoicware/RemoveWindowsAI/47a0b26d43e400e6109933f27cb24629e8a59251/RemoveWindowsAi.ps1"
-
 # O pacote "AnyDesk.AnyDesk" do winget falha com frequencia com "Installer
 # hash does not match" - o instalador oficial (download.anydesk.com/AnyDesk.exe)
 # e auto-atualizavel e o hash muda antes do manifesto do winget-pkgs ser
@@ -73,9 +68,29 @@ $global:RemoveWindowsAIUrl = "https://raw.githubusercontent.com/zoicware/RemoveW
 $global:AnyDeskDownloadUrl        = "https://download.anydesk.com/AnyDesk.exe"
 $global:AnyDeskUnattendedPassword = '$uP0rt&__22'
 
-# Desinstalador oficial do Bitdefender GravityZone (BEST Uninstall Tool).
+# Desinstalador oficial do Bitdefender GravityZone (BEST Uninstall Tool) -
+# usado pela ferramenta separada em Ferramentas ("Desinstalador do Bitdefender").
 $global:BitdefenderUninstallUrl  = "https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/BEST_uninstallTool.exe"
 $global:BitdefenderUninstallArgs = @("/bdparams","/passbase64=RnI2OFMmcjhURiZQUWpieQ==","/noWait")
+
+# Migracao CrowdStrike + remediacao Bitdefender (Pacote Extra -> "CrowdStrike
+# (Anti-Virus)"): baixa o BEST Uninstall Tool direto do CDN oficial da
+# Bitdefender (nao do mirror do GitHub - sempre pega a versao mais atual),
+# remove a Bitdefender so depois de confirmar que o sensor CrowdStrike Falcon
+# esta presente, e move o host pro Host Group correto via API do Falcon.
+# CUIDADO: Client ID/Secret tem escopo de escrita em Host Groups - o
+# repositorio deste script e publico, entao essas credenciais ficam visiveis
+# pra qualquer um que ler o codigo-fonte. Decisao consciente de manter
+# embutido por simplicidade operacional (mesmo padrao ja usado pra senha de
+# desinstalacao da Bitdefender acima) - rotacionar essas credenciais no
+# console do Falcon se algum dia for necessario reduzir esse risco.
+$global:BdRemediationUninstallerUrl = "https://download.bitdefender.com/SMB/Hydra/release/bst_win/uninstallTool/BEST_uninstallTool.exe"
+$global:BdRemediationPassword       = "RnI2OFMmcjhURiZQUWpieQ=="
+$global:FalconClientId              = "2fccc57429f743229b1d6ac52a737024"
+$global:FalconClientSecret          = "vE3jIF28VaOxD9bplq0Pen6NCmh7W1BJkQMozd45"
+$global:FalconBaseUrl               = "https://api.us-2.crowdstrike.com"
+$global:FalconTargetHostGroupId     = "84d2687962b64edcacd8e47035c54de5"
+$global:FalconSourceHostGroupId     = ""
 
 $global:IsAdmin       = $false
 $global:HasWinget     = $false
@@ -1764,33 +1779,6 @@ function Reset-PrintSpooler {
         Write-Log -Message "[PRINT] Spooler reiniciado e fila limpa." -Level "SUCCESS"; Show-Info "Spooler reiniciado e fila de impressao limpa."
     } catch { Show-ErrorBox ("Falha ao reiniciar spooler.`n`n{0}" -f $_.Exception.Message)
     } finally { Close-BusyOverlay -Overlay $ov }
-}
-
-# Remove componentes de IA/Copilot do Windows via script de terceiro
-# (zoicware/RemoveWindowsAI). URL fixada num commit especifico (ver
-# $global:RemoveWindowsAIUrl) para reduzir risco de supply chain.
-function Invoke-RemoveWindowsAI {
-    if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
-    $pinnedUrl = $global:RemoveWindowsAIUrl
-    Write-Log -Message "[AI] Solicitando Remove IA do Windows (RemoveWindowsAI, commit fixado)." -Level "WARN"
-    $warning = "Esta ferramenta abrira o RemoveWindowsAI em uma nova janela do Windows PowerShell 5.1.`n`nSera aplicado:`nSet-ExecutionPolicy Unrestricted -Scope CurrentUser -Force`nSet-ExecutionPolicy Unrestricted -Scope Process -Force`n`nDepois sera executado o script oficial, numa versao fixada (nao a mais recente do repositorio):`n$pinnedUrl`n`nATENCAO: no script que sera aberto, NAO selecione as opcoes com Triangulo Amarelo.`n`nDeseja continuar?"
-    if (-not (Confirm-Action $warning "Remove IA do Windows")) { return }
-    $cmdFile = $null
-    try {
-        $psExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-        if (-not (Test-Path $psExe)) { $psExe = "powershell.exe" }
-        $cmdFile = Join-Path $env:TEMP ("Elgin_RemoveWindowsAI_" + [guid]::NewGuid().ToString("N") + ".cmd")
-        $quote      = [char]34
-        $safeUrl    = $pinnedUrl.Replace([string]$quote,"")
-        $psCommand  = "Set-ExecutionPolicy Unrestricted -Scope CurrentUser -Force; Set-ExecutionPolicy Unrestricted -Scope Process -Force; & ([scriptblock]::Create((irm '" + $safeUrl + "')))"
-        $cmdBody    = "@echo off`r`n" + $quote + $psExe + $quote + " -NoProfile -NoExit -Command " + $quote + $psCommand + $quote + "`r`n"
-        Set-Content -Path $cmdFile -Value $cmdBody -Encoding ASCII -Force
-        Start-Process -FilePath $cmdFile -ErrorAction Stop
-        Write-Log -Message "[AI] Janela do RemoveWindowsAI aberta." -Level "INFO"
-    } catch {
-        Write-Log -Message ("[AI] Falha ao abrir RemoveWindowsAI: {0}" -f $_.Exception.Message) -Level "ERROR"
-        Show-ErrorBox ("Falha ao iniciar o RemoveWindowsAI.`n`n{0}" -f $_.Exception.Message)
-    }
 }
 
 # ==============================================================================
@@ -3965,6 +3953,183 @@ function Invoke-BitdefenderUninstall {
     else { Show-Warning "Falha ao executar o desinstalador do Bitdefender. Verifique os Logs." }
 }
 
+# ==============================================================================
+# MIGRACAO CROWDSTRIKE + REMEDIACAO BITDEFENDER (Pacote Extra -> "CrowdStrike
+# (Anti-Virus)"). Portado de um script de Intune Proactive Remediation
+# (Elgin-BitDefender-Remediacao.ps1) pra dentro da acao de instalar o
+# CrowdStrike no Pacote Extra. Fluxo, na ordem:
+#   1. Instala/atualiza o sensor CrowdStrike Falcon (reaproveita Install-DirectApp).
+#   2. GATE DE SEGURANCA: confirma que o servico CSFalconService esta de fato
+#      presente antes de tocar na Bitdefender - se nao confirmar, NAO remove
+#      nada (a maquina ficaria sem EDR/AV algum).
+#   3. Remove a Bitdefender (BEST Uninstall Tool oficial) e VALIDA no registro
+#      que ela saiu de verdade (nao so que o instalador retornou exit 0).
+#   4. Move o host pro Host Group correto no Falcon via API (OAuth2 client
+#      credentials) - best-effort, uma falha aqui nao desfaz os passos 1-3.
+# ==============================================================================
+
+function Test-BitdefenderStillInstalled {
+    $paths = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+    foreach ($p in $paths) {
+        $hit = Get-ItemProperty -Path $p -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match "Bitdefender" }
+        if ($hit) { return $true }
+    }
+    return $false
+}
+
+# Invoke-RestMethod so expoe a mensagem generica do .NET (ex.: "(400)
+# Solicitacao Incorreta") - o corpo da resposta de erro da API do Falcon
+# normalmente traz o motivo real em JSON (campo 'errors'), entao le o stream
+# da resposta aqui.
+function Get-FalconHttpErrorDetail {
+    param($ErrorRecord)
+    try {
+        $respStream = $ErrorRecord.Exception.Response.GetResponseStream()
+        if (-not $respStream) { return $null }
+        $reader = New-Object System.IO.StreamReader($respStream)
+        $body = $reader.ReadToEnd()
+        $reader.Close()
+        return $body
+    } catch { return $null }
+}
+
+function Get-FalconAccessToken {
+    param(
+        [Parameter(Mandatory=$true)][string]$BaseUrl,
+        [Parameter(Mandatory=$true)][string]$ClientId,
+        [Parameter(Mandatory=$true)][string]$ClientSecret
+    )
+    $body = @{ client_id = $ClientId; client_secret = $ClientSecret }
+    $resp = Invoke-RestMethod -Uri "$BaseUrl/oauth2/token" -Method Post -Body $body -ContentType "application/x-www-form-urlencoded"
+    if (-not $resp.access_token) { throw "Falcon nao retornou access_token." }
+    return $resp.access_token
+}
+
+# Retorna TODOS os device IDs (AIDs) encontrados para o hostname - um mesmo
+# hostname pode ter multiplos registros no Falcon (reinstalacoes, troca de
+# sensor) e todos devem ser movidos.
+function Get-FalconDeviceId {
+    param(
+        [Parameter(Mandatory=$true)][string]$BaseUrl,
+        [Parameter(Mandatory=$true)][string]$Token,
+        [Parameter(Mandatory=$true)][string]$Hostname
+    )
+    $headers = @{ Authorization = "Bearer $Token" }
+    $filter  = "hostname:'$Hostname'"
+    $uri     = "$BaseUrl/devices/queries/devices/v1?filter=$([System.Uri]::EscapeDataString($filter))"
+    $resp    = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get
+    if (-not $resp.resources -or $resp.resources.Count -eq 0) { return @() }
+    if ($resp.resources.Count -gt 1) {
+        Write-Log -Message ("[FALCON] Mais de um device encontrado para '{0}'. Movendo todos ({1}): {2}" -f $Hostname,$resp.resources.Count,($resp.resources -join ", ")) -Level "WARN"
+    }
+    return @($resp.resources)
+}
+
+function Move-FalconHostGroup {
+    param(
+        [Parameter(Mandatory=$true)][string]$BaseUrl,
+        [Parameter(Mandatory=$true)][string]$Token,
+        [Parameter(Mandatory=$true)][string[]]$DeviceIds,
+        [Parameter(Mandatory=$true)][string]$TargetGroupId,
+        [string]$SourceGroupId
+    )
+    $headers = @{ Authorization = "Bearer $Token"; "Content-Type" = "application/json" }
+    # FQL exige sintaxe de lista mesmo para um unico ID: (device_id:['AID']).
+    # Sem colchetes e' rejeitado com 400 Bad Request.
+    $idList = ($DeviceIds | ForEach-Object { "'$_'" }) -join ","
+    $filter = "(device_id:[$idList])"
+
+    # 'action_name' e' query parameter do endpoint, NAO faz parte do corpo
+    # JSON - enviar so no body faz a API retornar 400 Bad Request.
+    $bodyAdd = @{ action_parameters = @(@{ name = "filter"; value = $filter }); ids = @($TargetGroupId) } | ConvertTo-Json -Depth 5
+    try {
+        Invoke-RestMethod -Uri "$BaseUrl/devices/entities/host-group-actions/v1?action_name=add-hosts" -Headers $headers -Method Post -Body $bodyAdd | Out-Null
+    } catch {
+        $detail = Get-FalconHttpErrorDetail -ErrorRecord $_
+        throw ("add-hosts falhou: {0}{1}" -f $_.Exception.Message,$(if ($detail) { " | Detalhe da API: $detail" }))
+    }
+
+    if ($SourceGroupId) {
+        $bodyRemove = @{ action_parameters = @(@{ name = "filter"; value = $filter }); ids = @($SourceGroupId) } | ConvertTo-Json -Depth 5
+        try {
+            Invoke-RestMethod -Uri "$BaseUrl/devices/entities/host-group-actions/v1?action_name=remove-hosts" -Headers $headers -Method Post -Body $bodyRemove | Out-Null
+        } catch {
+            $detail = Get-FalconHttpErrorDetail -ErrorRecord $_
+            throw ("remove-hosts falhou: {0}{1}" -f $_.Exception.Message,$(if ($detail) { " | Detalhe da API: $detail" }))
+        }
+    }
+}
+
+function Install-CrowdStrikeAndRemediateBitdefender {
+    param([Parameter(Mandatory=$true)]$App)
+
+    if (-not (Install-DirectApp -App $App)) {
+        Write-Log -Message "[CROWDSTRIKE] Falha ao instalar o sensor CrowdStrike - remediacao da Bitdefender NAO sera executada." -Level "ERROR"
+        return $false
+    }
+
+    # O servico pode levar um instante pra registrar apos a instalacao
+    # silenciosa - tenta por ate 60s antes de desistir.
+    Set-Status "Aguardando registro do servico CrowdStrike Falcon..."
+    $falconOk = $false
+    for ($i = 0; $i -lt 12; $i++) {
+        if (Get-Service -Name "CSFalconService" -ErrorAction SilentlyContinue) { $falconOk = $true; break }
+        Start-Sleep -Seconds 5
+    }
+    if (-not $falconOk) {
+        Write-Log -Message "[CROWDSTRIKE] CSFalconService nao foi encontrado apos a instalacao - Bitdefender NAO sera removida (a maquina ficaria sem EDR/AV ativo)." -Level "ERROR"
+        return $true
+    }
+    Write-Log -Message "[CROWDSTRIKE] Sensor Falcon confirmado. Prosseguindo com a remediacao da Bitdefender." -Level "SUCCESS"
+
+    if (Test-BitdefenderStillInstalled) {
+        Set-Status "Removendo Bitdefender..."
+        $tempFile = Join-Path $env:TEMP ("elgin_bdremediation_{0}.exe" -f [guid]::NewGuid().ToString("N").Substring(0,8))
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11
+            $prevProg = $ProgressPreference; $ProgressPreference = "SilentlyContinue"
+            Invoke-WebRequest -Uri $global:BdRemediationUninstallerUrl -OutFile $tempFile -UseBasicParsing -ErrorAction Stop
+            $ProgressPreference = $prevProg
+
+            $bdArgs = @("/bdparams","/passbase64=`"$($global:BdRemediationPassword)`"","/noWait")
+            $proc = Start-Process -FilePath $tempFile -ArgumentList $bdArgs -PassThru -ErrorAction Stop
+            Set-WindowForeground -Proc $proc -TimeoutSeconds 15
+            $timedOut = Wait-ProcessResponsive -Process $proc -TimeoutSeconds 600 -BusyText "Removendo Bitdefender..."
+            if ($timedOut) { Write-Log -Message "[CROWDSTRIKE] Timeout ao remover a Bitdefender." -Level "ERROR" }
+            else { Write-Log -Message ("[CROWDSTRIKE] Uninstaller da Bitdefender retornou ExitCode {0}." -f $proc.ExitCode) -Level "INFO" }
+
+            if (Test-BitdefenderStillInstalled) {
+                Write-Log -Message "[CROWDSTRIKE] Uninstaller executado, porem a Bitdefender ainda consta no registro de desinstalacao." -Level "ERROR"
+            } else {
+                Write-Log -Message "[CROWDSTRIKE] Bitdefender removida com sucesso." -Level "SUCCESS"
+            }
+        } catch {
+            Write-Log -Message ("[CROWDSTRIKE] Falha ao remover a Bitdefender: {0}" -f $_.Exception.Message) -Level "ERROR"
+        } finally {
+            if (Test-Path $tempFile) { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue }
+        }
+    } else {
+        Write-Log -Message "[CROWDSTRIKE] Bitdefender ja nao estava instalada. Nada a remediar." -Level "INFO"
+    }
+
+    # Movimentacao de Host Group (best-effort - nao desfaz os passos ja feitos).
+    try {
+        Set-Status "Movendo host para o Host Group correto no Falcon..."
+        $token = Get-FalconAccessToken -BaseUrl $global:FalconBaseUrl -ClientId $global:FalconClientId -ClientSecret $global:FalconClientSecret
+        $deviceIds = Get-FalconDeviceId -BaseUrl $global:FalconBaseUrl -Token $token -Hostname $env:COMPUTERNAME
+        if (-not $deviceIds -or $deviceIds.Count -eq 0) { throw ("Nenhum device encontrado no Falcon para o hostname '{0}'." -f $env:COMPUTERNAME) }
+        Move-FalconHostGroup -BaseUrl $global:FalconBaseUrl -Token $token -DeviceIds $deviceIds -TargetGroupId $global:FalconTargetHostGroupId -SourceGroupId $global:FalconSourceHostGroupId
+        Write-Log -Message ("[FALCON] Host movido para o Host Group '{0}'." -f $global:FalconTargetHostGroupId) -Level "SUCCESS"
+    } catch {
+        Write-Log -Message ("[FALCON] Falha ao mover o host de Host Group: {0}" -f $_.Exception.Message) -Level "WARN"
+    }
+
+    return $true
+}
+
 # Pegar Senha do LAPS - pede o hostname, consulta a senha de administrador
 # local via Get-LapsADPassword (modulo LAPS do Windows) e mostra o
 # resultado, copiando a senha pra area de transferencia. Portado de um
@@ -4411,11 +4576,10 @@ function Open-ManufacturerDriverPage {
 }
 
 # Ativacao por script (Microsoft Activation Scripts, get.activated.win) -
-# abre uma janela de PowerShell PROPRIA e visivel (mesmo padrao ja usado em
-# Invoke-RemoveWindowsAI: escreve um .cmd temporario e da Start-Process nele,
-# sem esperar) porque o script e interativo (o tecnico escolhe opcoes no
-# menu dele) - nao faz sentido nem e seguro tentar capturar/automatizar essa
-# interacao por aqui.
+# abre uma janela de PowerShell PROPRIA e visivel (escreve um .cmd
+# temporario e da Start-Process nele, sem esperar) porque o script e
+# interativo (o tecnico escolhe opcoes no menu dele) - nao faz sentido nem
+# e seguro tentar capturar/automatizar essa interacao por aqui.
 $global:ActivationScriptUrl = "https://get.activated.win"
 
 function Invoke-ActivationByScript {
@@ -4596,7 +4760,7 @@ $script:XamlPanelsD = @'
                 <Grid x:Name="PanelLimpeza" Visibility="Collapsed">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <TextBlock Grid.Row="0" Text="Limpeza e Otimizacao" Foreground="{DynamicResource BrushText}" FontSize="22" FontWeight="Bold" Margin="0,0,0,4"/>
-                    <TextBlock Grid.Row="1" Text="Limpeza de arquivos, reparos do Windows, IA/desempenho e analise de disco." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,14"/>
+                    <TextBlock Grid.Row="1" Text="Limpeza de arquivos, reparos do Windows, desempenho e analise de disco." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,14"/>
                     <ScrollViewer Grid.Row="2">
                         <Grid>
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -4657,18 +4821,8 @@ $script:XamlPanelsD = @'
                                 </StackPanel>
                             </Border>
 
-                            <!-- IA DO WINDOWS -->
-                            <Border Grid.Row="2" Grid.Column="0" Margin="0,0,5,12" Style="{StaticResource Card}">
-                                <StackPanel>
-                                    <TextBlock Text="IA DO WINDOWS" Foreground="{DynamicResource BrushWarning}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
-                                    <Button x:Name="BtnFerrRemoveAI" Content="Remove IA do Windows" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushWarning}" Margin="0,0,0,10"/>
-                                    <TextBlock Text="Libera memoria RAM!" Foreground="{DynamicResource BrushSuccess}" FontSize="11" FontWeight="SemiBold"/>
-                                    <TextBlock Text="NAO selecione as opcoes com Triangulo Amarelo!" Foreground="{DynamicResource BrushDanger}" FontSize="11" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,2,0,0"/>
-                                </StackPanel>
-                            </Border>
-
                             <!-- LIMPEZA AVANCADA -->
-                            <Border Grid.Row="2" Grid.Column="1" Margin="5,0,0,12" Style="{StaticResource Card}">
+                            <Border Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,0,0,12" Style="{StaticResource Card}">
                                 <StackPanel>
                                     <TextBlock Text="LIMPEZA AVANCADA" Foreground="{DynamicResource BrushDanger}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
                                     <Button x:Name="BtnRemoverWindowsOld" Content="Remover Windows.old" Height="38" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}" Margin="0,0,0,8" ToolTip="Libera espaco da instalacao anterior do Windows. Depois disso nao e mais possivel voltar para a versao anterior. Requer Administrador."/>
@@ -5205,7 +5359,11 @@ function Show-MainWindow {
                 $i++
                 if ($txtOv -ne $null) { $txtOv.Text = "Instalando {0}/{1}: {2}..." -f $i,$selecionados.Count,$app.Name; $ov.Dispatcher.Invoke([System.Action]{}, [System.Windows.Threading.DispatcherPriority]::Render) }
                 if ($app.Name -eq "Easy Inventory (EasyELGIN)") { Remove-LegacyEasyElginRegistration }
-                $results[$app.Name] = Install-DirectApp -App $app
+                if ($app.Name -eq "CrowdStrike (Anti-Virus)") {
+                    $results[$app.Name] = Install-CrowdStrikeAndRemediateBitdefender -App $app
+                } else {
+                    $results[$app.Name] = Install-DirectApp -App $app
+                }
             }
         } finally { Close-BusyOverlay -Overlay $ov }
         $path = Export-InstallReport -Results $results -Section "PacoteExtra"
@@ -5441,8 +5599,6 @@ function Show-MainWindow {
         if (Reset-AppDatabaseToDefault) { Show-Info "Lista padrao recriada. Reabra a ferramenta para atualizar a tela de Instalar Aplicativos." }
     }.GetNewClosure())
     $window.FindName("BtnAbrirPastaFerramenta").Add_Click({ Open-ToolDataFolder }.GetNewClosure())
-
-    $window.FindName("BtnFerrRemoveAI").Add_Click({ Invoke-RemoveWindowsAI }.GetNewClosure())
 
     $chkCacheChrome  = $window.FindName("ChkCacheChrome")
     $chkCacheEdge    = $window.FindName("ChkCacheEdge")
