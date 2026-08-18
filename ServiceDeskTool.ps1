@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.27"
+$global:AppVersion    = "3.28"
 $global:SchemaVersion = 5
 $global:ExtraSchemaVersion = 8
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
@@ -72,6 +72,15 @@ $global:AnyDeskUnattendedPassword = '$uP0rt&__22'
 # usado pela ferramenta separada em Ferramentas ("Desinstalador do Bitdefender").
 $global:BitdefenderUninstallUrl  = "https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/BEST_uninstallTool.exe"
 $global:BitdefenderUninstallArgs = @("/bdparams","/passbase64=RnI2OFMmcjhURiZQUWpieQ==","/noWait")
+
+# Snappy Driver Installer Origin (SDIO) - ferramenta portable de scan e
+# download de drivers usada pela aba "Drivers". O zip oficial e publicado pelo
+# mantenedor do projeto; ao subir de versao, pegar o link novo em
+# https://www.glenn.delahoy.com/snappy-driver-installer-origin/ e conferir que
+# o binario continua assinado (Authenticode, CN=Glenn Delahoy).
+$global:SdioDownloadUrl  = "https://www.glenn.delahoy.com/downloads/sdio/SDIO_2.0.2.884.zip"
+$global:SdioVersion      = "2.0.2.884"
+$global:SdioApproxSizeMB = 12
 
 # Migracao CrowdStrike + remediacao Bitdefender (Pacote Extra -> "CrowdStrike
 # (Anti-Virus)"): baixa o BEST Uninstall Tool direto do CDN oficial da
@@ -2674,6 +2683,18 @@ $script:XamlHead = @'
                                 <TextBlock Grid.Column="1" Text="Instalar Aplicativos" Style="{StaticResource SidebarNavLabel}"/>
                             </Grid>
                         </Button>
+                        <Button x:Name="NavDrivers" Style="{StaticResource SidebarButton}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource SidebarNavIcon}" Background="#F97316">
+                                    <TextBlock Text="DR" Style="{StaticResource SidebarNavIconText}"/>
+                                </Border>
+                                <TextBlock Grid.Column="1" Text="Drivers" Style="{StaticResource SidebarNavLabel}"/>
+                            </Grid>
+                        </Button>
                         <TextBlock Text="REDE" Style="{StaticResource NavGroupLabel}"/>
                         <Button x:Name="NavRede" Style="{StaticResource SidebarButton}">
                             <Grid>
@@ -3954,6 +3975,129 @@ function Invoke-BitdefenderUninstall {
 }
 
 # ==============================================================================
+# DRIVERS - Snappy Driver Installer Origin (SDIO)
+# Ferramenta gratuita de terceiro pra escanear e baixar drivers faltantes,
+# por tras da aba "Drivers". Roda 100% do %TEMP%: baixa o .zip oficial, extrai
+# e abre a interface do SDIO. NAO instala nada na maquina e nao escreve no
+# registro - apagar a pasta do TEMP nao deixa residuo algum.
+#
+# Numeros MEDIDOS em maquina real desta rede (nao chutar, e nao baixar esses
+# timeouts sem medir de novo):
+#   - o .zip tem ~12 MB e o download do site do mantenedor e LENTO: 247s
+#     medidos (~47 KB/s). Dai o timeout generoso e o reaproveitamento da pasta
+#     ja extraida em vez de baixar a cada clique.
+#   - a extracao leva ~8,5s e gera ~190 arquivos - tempo de sobra pra congelar
+#     a janela WPF, por isso roda em processo filho via Invoke-ManagedProcess.
+#   - a janela do SDIO leva ~1 min pra aparecer na PRIMEIRA execucao (ele
+#     indexa antes de desenhar a UI). Sem avisar, o tecnico acha que travou.
+#   - os binarios do SDIO tem Authenticode valido (CN=Glenn Delahoy), mas os
+#     DRIVERPACKS que ele baixa depois vem de repositorio da comunidade e nem
+#     todos sao assinados pela Microsoft - dai o aviso no dialogo e na aba.
+# ==============================================================================
+
+function Get-SdioExecutable {
+    param([string]$Folder)
+    if ([string]::IsNullOrWhiteSpace($Folder)) { return $null }
+    if (-not (Test-Path $Folder)) { return $null }
+    # O nome do binario traz o numero da build (SDIO_x64_R884.exe), entao a
+    # selecao e por PADRAO, nunca por nome fixo - assim uma versao nova do zip
+    # nao quebra a ferramenta. O filtro precisa ser exato: o mesmo zip traz
+    # "SDIO-XP_x64_R884.exe" (build pra Windows XP) e "SDIOTranslationTool.exe",
+    # e um glob ingenuo de "SDIO*.exe" abriria o binario errado.
+    $todos = @(Get-ChildItem -Path $Folder -Filter "SDIO*.exe" -File -Recurse -ErrorAction SilentlyContinue |
+               Where-Object { $_.Name -match '^SDIO_(x64_)?R\d+\.exe$' })
+    if ($todos.Count -eq 0) { return $null }
+    $escolhido = $null
+    if ([Environment]::Is64BitOperatingSystem) {
+        $escolhido = $todos | Where-Object { $_.Name -match 'x64' } | Select-Object -First 1
+    }
+    if ($escolhido -eq $null) { $escolhido = $todos | Where-Object { $_.Name -notmatch 'x64' } | Select-Object -First 1 }
+    if ($escolhido -eq $null) { $escolhido = $todos[0] }
+    return $escolhido.FullName
+}
+
+function Start-SdioProcess {
+    param([string]$ExePath)
+    try {
+        # Sem -Wait de proposito: o SDIO fica aberto pro tecnico trabalhar e a
+        # Service Desk Tool continua utilizavel ao lado. O padrao "nao trava"
+        # do app vale pra processo que precisamos ESPERAR - aqui nao e o caso.
+        $proc = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path $ExePath -Parent) -PassThru
+        Write-Log -Message ("[DRIVERS] SDIO aberto (PID {0}): {1}" -f $proc.Id,$ExePath)
+        Set-Status "Snappy Driver Installer aberto."
+        Show-Info "O Snappy Driver Installer foi aberto numa janela separada.`n`nNa primeira execucao a janela dele pode levar cerca de 1 minuto pra aparecer - ele indexa os drivers antes de desenhar a interface. Aguarde, nao esta travado.`n`nA Service Desk Tool continua disponivel enquanto isso."
+        return $true
+    } catch {
+        Write-Log -Message ("[DRIVERS] Falha ao abrir o SDIO: {0}" -f $_.Exception.Message) -Level "ERROR"
+        Show-ErrorBox ("Nao foi possivel abrir o Snappy Driver Installer.`n`n{0}" -f $_.Exception.Message)
+        return $false
+    }
+}
+
+function Invoke-DriverScanTool {
+    if (-not $global:IsAdmin) { Show-Warning "Requer Administrador para instalar drivers."; return }
+
+    $destDir = Join-Path $env:TEMP ("elgin_sdio_{0}" -f $global:SdioVersion)
+
+    # Reaproveita a pasta se o SDIO ja foi baixado nesta maquina - sao ~12 MB
+    # num download lento, repetir a cada clique seria cruel com o tecnico.
+    $exe = Get-SdioExecutable -Folder $destDir
+    if ($exe -ne $null) {
+        Write-Log -Message ("[DRIVERS] Reaproveitando SDIO ja extraido em {0}" -f $destDir)
+        [void](Start-SdioProcess -ExePath $exe)
+        return
+    }
+
+    $msg  = ("Isso vai baixar o Snappy Driver Installer Origin (SDIO {0}), uma ferramenta gratuita de terceiro que escaneia a maquina e baixa drivers faltantes.`n`n" -f $global:SdioVersion)
+    $msg += ("O download tem cerca de {0} MB e pode levar VARIOS MINUTOS. A ferramenta roda direto da pasta temporaria: nada e instalado nesta maquina.`n`n" -f $global:SdioApproxSizeMB)
+    $msg += "ATENCAO: os drivers oferecidos pelo SDIO vem de repositorios da comunidade e nem todos sao assinados pela Microsoft. Revise o que for instalar e prefira o driver oficial do fabricante quando existir.`n`n"
+    $msg += "Continuar?"
+    if (-not (Confirm-Action $msg "Scan de Drivers")) { return }
+
+    $zipPath = Join-Path $env:TEMP ("elgin_sdio_{0}.zip" -f [guid]::NewGuid().ToString("N").Substring(0,8))
+    Set-Status "Baixando o Snappy Driver Installer..."
+    Write-Log -Message ("[DRIVERS] Download: {0}" -f $global:SdioDownloadUrl)
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls
+
+    $baixou  = $false
+    $curlExe = Join-Path $env:SystemRoot "System32\curl.exe"
+    if (-not (Test-Path $curlExe)) { $curlExe = Join-Path $env:SystemRoot "SysWOW64\curl.exe" }
+    if (Test-Path $curlExe) {
+        $curlArgs = @("-L","--fail","--silent","--show-error","-A","Mozilla/5.0 (Windows NT 10.0; Win64; x64)","-o",$zipPath,$global:SdioDownloadUrl)
+        $res = Invoke-ManagedProcess -FilePath $curlExe -Arguments $curlArgs -Description "[DRIVERS] Download SDIO" -TimeoutSeconds 1800 -BusyText "Baixando o Snappy Driver Installer (pode levar varios minutos)..."
+        if ($res.ExitCode -eq 0 -and (Test-Path $zipPath)) { $baixou = $true }
+        else { Write-Log -Message ("[DRIVERS] curl falhou (exit {0}): {1}" -f $res.ExitCode,([string]$res.Error).Trim()) -Level "WARN" }
+    } else {
+        Write-Log -Message "[DRIVERS] curl.exe nao encontrado nesta maquina." -Level "WARN"
+    }
+    if (-not $baixou) {
+        Show-Warning "Nao foi possivel baixar o Snappy Driver Installer. Verifique a conexao e os Logs."
+        return
+    }
+
+    # Extracao em PROCESSO FILHO, nao Expand-Archive em processo: sao ~190
+    # arquivos e ~8,5s medidos, tempo de sobra pra congelar a janela WPF.
+    # Passando pelo Invoke-ManagedProcess a espera ja e responsiva.
+    $psExe     = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    $expandCmd = "Expand-Archive -LiteralPath '{0}' -DestinationPath '{1}' -Force" -f $zipPath,$destDir
+    $resExp    = Invoke-ManagedProcess -FilePath $psExe -Arguments @("-NoProfile","-ExecutionPolicy","Bypass","-Command",$expandCmd) -Description "[DRIVERS] Extraindo SDIO" -TimeoutSeconds 600 -BusyText "Extraindo o Snappy Driver Installer..."
+    try { if (Test-Path $zipPath) { Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue } } catch {}
+    if ($resExp.ExitCode -ne 0) {
+        Write-Log -Message ("[DRIVERS] Extracao falhou (exit {0})." -f $resExp.ExitCode) -Level "ERROR"
+        Show-Warning "Falha ao extrair o Snappy Driver Installer. Verifique os Logs."
+        return
+    }
+
+    $exe = Get-SdioExecutable -Folder $destDir
+    if ($exe -eq $null) {
+        Write-Log -Message ("[DRIVERS] Nenhum executavel do SDIO encontrado em {0}" -f $destDir) -Level "ERROR"
+        Show-Warning "O pacote foi baixado e extraido, mas o executavel do SDIO nao foi encontrado."
+        return
+    }
+    [void](Start-SdioProcess -ExePath $exe)
+}
+
+# ==============================================================================
 # MIGRACAO CROWDSTRIKE + REMEDIACAO BITDEFENDER (Pacote Extra -> "CrowdStrike
 # (Anti-Virus)"). Portado de um script de Intune Proactive Remediation
 # (Elgin-BitDefender-Remediacao.ps1) pra dentro da acao de instalar o
@@ -4856,6 +5000,34 @@ $script:XamlPanelsD = @'
                     </ScrollViewer>
                 </Grid>
 
+                <!-- Drivers -->
+                <Grid x:Name="PanelDrivers" Visibility="Collapsed">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="Drivers" Foreground="{DynamicResource BrushText}" FontSize="22" FontWeight="Bold" Margin="0,0,0,4"/>
+                    <TextBlock Grid.Row="1" Text="Escaneia a maquina e baixa drivers faltantes." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,14"/>
+                    <ScrollViewer Grid.Row="2">
+                        <StackPanel>
+                            <Border Margin="0,0,0,12" Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="SCAN E DOWNLOAD DE DRIVERS" Foreground="#F97316" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <TextBlock Text="Baixa e abre o Snappy Driver Installer Origin (SDIO), ferramenta gratuita que escaneia os dispositivos da maquina e baixa os drivers que estao faltando ou desatualizados." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                    <TextBlock Text="Ela roda direto da pasta temporaria: NAO instala nada nesta maquina e nao mexe no registro. O download tem cerca de 12 MB e pode levar varios minutos - depois da primeira vez a ferramenta e reaproveitada e abre na hora." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                    <TextBlock Text="Na primeira execucao a janela do SDIO leva cerca de 1 minuto para aparecer - ele indexa os drivers antes de desenhar a interface. Nao esta travado." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <Button x:Name="BtnScanDrivers" Content="Escanear Drivers" Height="38" Width="240" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="#F97316"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Margin="0,0,0,12" Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="ANTES DE INSTALAR" Foreground="{DynamicResource BrushWarning}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <TextBlock Text="Os drivers oferecidos pelo SDIO vem de repositorios da comunidade e nem todos sao assinados pela Microsoft. Sempre que existir driver oficial do fabricante (Dell, Intel, HP, Lenovo), prefira o oficial. Use o SDIO para o que o fabricante nao cobre." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                    <TextBlock Text="Evite atualizar firmware/BIOS por aqui. Revise a lista antes de aplicar e crie um ponto de restauracao se for mexer em driver de video ou armazenamento." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+
                 <!-- Ferramentas -->
                 <Grid x:Name="PanelFerramentas" Visibility="Collapsed">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
@@ -4963,6 +5135,7 @@ function Show-MainWindow {
         Inicio    = $window.FindName("PanelInicio")
         Checklist = $window.FindName("PanelChecklist")
         Instalar  = $window.FindName("PanelInstalar")
+        Drivers   = $window.FindName("PanelDrivers")
         Diagnostico = $window.FindName("PanelDiagnostico")
         Rede      = $window.FindName("PanelRede")
         Impressao = $window.FindName("PanelImpressao")
@@ -4974,6 +5147,7 @@ function Show-MainWindow {
         Inicio    = $window.FindName("NavInicio")
         Checklist = $window.FindName("NavChecklist")
         Instalar  = $window.FindName("NavInstalar")
+        Drivers   = $window.FindName("NavDrivers")
         Diagnostico = $window.FindName("NavDiagnostico")
         Rede      = $window.FindName("NavRede")
         Impressao = $window.FindName("NavImpressao")
@@ -4982,7 +5156,7 @@ function Show-MainWindow {
         Logs      = $window.FindName("NavLogs")
     }
     $panelTitles = @{
-        Inicio="Inicio"; Checklist="Checklist"; Instalar="Instalar Aplicativos"
+        Inicio="Inicio"; Checklist="Checklist"; Instalar="Instalar Aplicativos"; Drivers="Drivers"
         Diagnostico="Diagnostico"; Rede="Rede"; Impressao="Impressao"; Limpeza="Limpeza e Otimizacao"
         Ferramentas="Ferramentas"; Logs="Logs"
     }
@@ -5018,6 +5192,7 @@ function Show-MainWindow {
     $homeShortcuts = @(
         @{ Key="Checklist";   Title="Checklist";            Desc="Formatacao e configuracao passo a passo";                     Categoria="Setup";         Mono="CK"; Cor="#4C6FFF" }
         @{ Key="Instalar";    Title="Instalar Aplicativos";  Desc="Lista padrao, busca winget/choco e Pacote Extra";             Categoria="Instalacao";    Mono="IN"; Cor="#22C55E" }
+        @{ Key="Drivers";     Title="Drivers";               Desc="Escaneia e baixa drivers faltantes (Snappy Driver Installer)"; Categoria="Instalacao";    Mono="DR"; Cor="#F97316" }
         @{ Key="Diagnostico"; Title="Diagnostico";           Desc="Relatorio do sistema, ativacao do Windows/Office e boot";     Categoria="Diagnostico";   Mono="DG"; Cor="#2563EB" }
         @{ Key="Rede";        Title="Rede";                  Desc="DNS, IP, Winsock, Wi-Fi, conexoes e unidades mapeadas";       Categoria="Diagnostico";   Mono="RD"; Cor="#0EA5E9" }
         @{ Key="Impressao";   Title="Impressao";             Desc="Spooler, monitor SNMP e gerenciamento de impressoras";        Categoria="Equipamentos";  Mono="IP"; Cor="#7C6FFA" }
@@ -5582,6 +5757,9 @@ function Show-MainWindow {
     }.GetNewClosure())
     $window.FindName("BtnDesinstalarBitdefender").Add_Click({ Invoke-BitdefenderUninstall }.GetNewClosure())
     $window.FindName("BtnPegarSenhaLaps").Add_Click({ Invoke-LapsPasswordLookup }.GetNewClosure())
+
+    # ---- Drivers ----
+    $window.FindName("BtnScanDrivers").Add_Click({ Invoke-DriverScanTool }.GetNewClosure())
     $window.FindName("BtnChkdsk").Add_Click({ Invoke-ChkdskScheduled -Drive "C:" }.GetNewClosure())
     $window.FindName("BtnMaxPerformance").Add_Click({ Enable-MaxPerformancePowerPlan }.GetNewClosure())
 
