@@ -38,7 +38,13 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.28"
+$global:AppVersion    = "3.29"
+# Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
+# colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
+# caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
+# Request-AdminElevation nao tinha como montar o comando de re-execucao: a
+# ferramenta abria mas nunca conseguia virar Administrador ("SourceUrl vazia").
+$global:FallbackSourceUrl = "https://cdn.jsdelivr.net/gh/Dan-Vaz/elgin-service-desk-tool@master/ServiceDeskTool.ps1"
 $global:SchemaVersion = 5
 $global:ExtraSchemaVersion = 8
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
@@ -207,14 +213,40 @@ function Request-AdminElevation {
         Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile","-STA","-Command",$command) -Verb RunAs | Out-Null
         return $true
     } catch {
-        Write-Log -Message ("[ELEVATE] Falha ao solicitar elevacao: {0}" -f $_.Exception.Message) -Level "ERROR"
-        Show-ErrorBox ("Nao foi possivel solicitar elevacao administrativa.`n`n{0}" -f $_.Exception.Message)
+        # Cancelar o UAC (fechar a janela ou nao digitar credencial) NAO e erro,
+        # e escolha do tecnico - mostrar caixa vermelha de falha aqui so confunde.
+        # A deteccao e pelo codigo nativo 1223 (ERROR_CANCELLED) percorrendo a
+        # cadeia de InnerException, NUNCA pelo texto da mensagem: ela e traduzida
+        # pelo idioma do Windows (mesma armadilha do ospp.vbs).
+        $cancelado = $false
+        $ex = $_.Exception
+        while ($ex -ne $null) {
+            if ($ex -is [System.ComponentModel.Win32Exception] -and $ex.NativeErrorCode -eq 1223) { $cancelado = $true; break }
+            $ex = $ex.InnerException
+        }
+        if ($cancelado) {
+            Write-Log -Message "[ELEVATE] Elevacao cancelada no UAC - abrindo sem privilegio administrativo." -Level "WARN"
+        } else {
+            Write-Log -Message ("[ELEVATE] Falha ao solicitar elevacao: {0}" -f $_.Exception.Message) -Level "ERROR"
+            Show-ErrorBox ("Nao foi possivel solicitar elevacao administrativa.`n`n{0}" -f $_.Exception.Message)
+        }
         return $false
     }
 }
 
+# Rodando sem o .bat/.exe, a variavel de ambiente nao existe. Cair pro padrao
+# aqui (e nao no param(), que e avaliado antes das globais existirem) e o que
+# permite ao Request-AdminElevation se re-executar via UAC.
+if ([string]::IsNullOrWhiteSpace($SourceUrl)) {
+    $SourceUrl = $global:FallbackSourceUrl
+    Write-Log -Message ("[ELEVATE] ELGIN_SERVICE_DESK_URL ausente - usando a fonte padrao: {0}" -f $SourceUrl) -Level "WARN"
+}
+
 if (-not $NoElevatePrompt -and -not (Test-IsAdmin)) {
     $elevated = Request-AdminElevation -Url $SourceUrl -SilentMode:$Silent
+    # Se nao elevou (tecnico recusou o aviso ou cancelou o UAC sem digitar
+    # credencial), NAO sai: segue e abre a ferramenta sem privilegio, com as
+    # acoes administrativas barrando individualmente com "Requer Administrador".
     if ($elevated) { exit 0 }
 }
 
