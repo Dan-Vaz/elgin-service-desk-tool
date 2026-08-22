@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.33"
+$global:AppVersion    = "3.34"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -46,7 +46,7 @@ $global:AppVersion    = "3.33"
 # ferramenta abria mas nunca conseguia virar Administrador ("SourceUrl vazia").
 $global:FallbackSourceUrl = "https://cdn.jsdelivr.net/gh/Dan-Vaz/elgin-service-desk-tool@master/ServiceDeskTool.ps1"
 $global:SchemaVersion = 8
-$global:ExtraSchemaVersion = 9
+$global:ExtraSchemaVersion = 10
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
 $global:AssetsPath    = Join-Path $global:BasePath  "Assets"
@@ -982,6 +982,17 @@ function Get-DefaultExtraAppList {
         # UninstallMatch sem o simbolo (R) do nome real ("Intel(R) Driver &
         # Support Assistant"): o arquivo inteiro tem que continuar ASCII.
         [PSCustomObject]@{Name="Intel Driver & Support Assistant"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/Intel-Driver-and-Support-Assistant-Installer.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true; UninstallMatch="Driver & Support Assistant"}
+        # TOTVS Web Agent 1.1.0 - especifico do cliente Laurenti, por isso o
+        # "(Somente Laurenti)" no nome: e o unico aviso que o tecnico tem de
+        # que isso NAO deve ser instalado nas demais maquinas.
+        # Instalador NSIS assinado pela TOTVS S.A. (Authenticode valido).
+        # SilentArgs vazio de proposito, mesma convencao dos outros agentes de
+        # fabricante da lista (DELL, HP, OCS, Linkus, Intel): roda com a UI
+        # visivel. O NSIS aceita "/S" pra instalar em silencio se um dia for
+        # necessario, mas nao foi exercitado numa maquina - e um agente que
+        # pode precisar de configuracao no meio da instalacao, entao deixar o
+        # tecnico ver a tela e mais seguro do que arriscar instalar torto.
+        [PSCustomObject]@{Name="TOTVS (Somente Laurenti)"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/TOTVS-WebAgent-1.1.0-x64.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true; UninstallMatch="Web Agent"}
     )
 }
 
