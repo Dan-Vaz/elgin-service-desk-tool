@@ -38,13 +38,23 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.35"
+$global:AppVersion    = "3.36"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
 # Request-AdminElevation nao tinha como montar o comando de re-execucao: a
 # ferramenta abria mas nunca conseguia virar Administrador ("SourceUrl vazia").
-$global:FallbackSourceUrl = "https://cdn.jsdelivr.net/gh/Dan-Vaz/elgin-service-desk-tool@master/ServiceDeskTool.ps1"
+# Fonte CANONICA: o gist, que serve a versao nova na hora. O jsDelivr NAO serve
+# pra isso - ele cacheia o apelido @master por ate 12h (s-maxage=43200), entao
+# pode estar varias versoes atras sem dar nenhum sinal de erro.
+$global:CanonicalSourceUrl = "https://gist.githubusercontent.com/Dan-Vaz/91cf3659c455bb69ff32e6c7cb99fa6d/raw/ServiceDeskTool.ps1"
+# Usada quando a ferramenta roda SEM o .bat/.exe (tecnico colando o link direto
+# no PowerShell), caso em que ELGIN_SERVICE_DESK_URL nao existe.
+# Ja apontou pro jsDelivr e isso causou um bug bem confuso: a ferramenta abria
+# na versao nova (vinda do gist pelo link curto), o tecnico clicava em SIM pra
+# elevar, e a instancia elevada era relancada DESTA url - voltando pra uma
+# versao MAIS VELHA do que a que ele acabara de abrir.
+$global:FallbackSourceUrl = $global:CanonicalSourceUrl
 $global:SchemaVersion = 8
 $global:ExtraSchemaVersion = 10
 # Falhas de escrita nos JSONs de configuracao, coletadas durante o startup e
@@ -259,6 +269,59 @@ if ([string]::IsNullOrWhiteSpace($SourceUrl)) {
     $SourceUrl = $global:FallbackSourceUrl
     Write-Log -Message ("[ELEVATE] ELGIN_SERVICE_DESK_URL ausente - usando a fonte padrao: {0}" -f $SourceUrl) -Level "WARN"
 }
+
+# ==============================================================================
+# AUTOATUALIZACAO
+# A ferramenta pode ser aberta a partir de uma fonte DESATUALIZADA: o jsDelivr
+# cacheia o apelido @master por ate 12h, e os .bat/.exe ja distribuidos nas
+# maquinas apontam pra la de forma fixa (o .exe nem tem fallback). O tecnico
+# rodava versao antiga sem nenhum sinal disso.
+# Aqui a ferramenta compara a propria versao com a do gist (fonte canonica, sem
+# cache) e se relanca de la quando esta atras. Isso conserta em tempo de
+# execucao ate os lancadores antigos que nao da pra atualizar remotamente.
+# Le so os primeiros 3 KB via Range (testado: HTTP 206, ~400ms) em vez de
+# baixar os ~365 KB inteiros so pra ler o numero da versao.
+# ==============================================================================
+function Update-ToLatestIfOutdated {
+    # Guarda contra loop: a instancia relancada nao checa de novo. Sem isso,
+    # qualquer divergencia persistente de versao viraria relancamento infinito.
+    if ($env:ELGIN_UPDATE_CHECKED -eq "1") { return }
+    $relancar = $false
+    try {
+        $req = [Net.HttpWebRequest]::Create($global:CanonicalSourceUrl)
+        $req.Timeout = 15000
+        $req.AddRange(0,3071)
+        $resp = $req.GetResponse()
+        $sr   = New-Object IO.StreamReader($resp.GetResponseStream())
+        $trecho = $sr.ReadToEnd()
+        $resp.Close()
+        $m = [regex]::Match($trecho,'AppVersion\s*=\s*"([\d.]+)"')
+        if ($m.Success) {
+            # Comparacao como [version], NUNCA como string: em texto "3.9"
+            # seria considerado MAIOR que "3.10", e a atualizacao pararia de
+            # funcionar justamente ao virar a dezena.
+            $remota = [version]$m.Groups[1].Value
+            $local  = [version]$global:AppVersion
+            if ($remota -gt $local) {
+                Write-Log -Message ("[UPDATE] Versao local {0} desatualizada - relancando da fonte canonica na {1}." -f $local,$remota) -Level "WARN"
+                Write-Host ("Atualizando da versao {0} para {1}..." -f $local,$remota) -ForegroundColor Cyan
+                $safeUrl = $global:CanonicalSourceUrl.Replace("'","''")
+                $cmd = "`$env:ELGIN_UPDATE_CHECKED='1'; `$env:ELGIN_SERVICE_DESK_URL='$safeUrl'; irm `$env:ELGIN_SERVICE_DESK_URL | iex"
+                Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile","-STA","-Command",$cmd) | Out-Null
+                $relancar = $true
+            }
+        }
+    } catch {
+        # Sem rede, gist fora do ar, proxy bloqueando: segue com a versao atual
+        # em vez de impedir o tecnico de trabalhar.
+        Write-Log -Message ("[UPDATE] Nao foi possivel checar atualizacao: {0}" -f $_.Exception.Message) -Level "WARN"
+    }
+    # exit fora do try de proposito, pra nao depender de como o PowerShell trata
+    # fluxo de controle dentro de try/catch.
+    if ($relancar) { exit 0 }
+}
+
+Update-ToLatestIfOutdated
 
 if (-not $NoElevatePrompt -and -not (Test-IsAdmin)) {
     $elevated = Request-AdminElevation -Url $SourceUrl -SilentMode:$Silent
