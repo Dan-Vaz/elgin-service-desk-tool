@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.30"
+$global:AppVersion    = "3.31"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -46,7 +46,7 @@ $global:AppVersion    = "3.30"
 # ferramenta abria mas nunca conseguia virar Administrador ("SourceUrl vazia").
 $global:FallbackSourceUrl = "https://cdn.jsdelivr.net/gh/Dan-Vaz/elgin-service-desk-tool@master/ServiceDeskTool.ps1"
 $global:SchemaVersion = 6
-$global:ExtraSchemaVersion = 8
+$global:ExtraSchemaVersion = 9
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
 $global:AssetsPath    = Join-Path $global:BasePath  "Assets"
@@ -947,6 +947,13 @@ function Get-DefaultExtraAppList {
         [PSCustomObject]@{Name="HP Support Assistant";      Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/HP.Support.Assistant.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true; UninstallMatch="HP Support Assistant"}
         [PSCustomObject]@{Name="OCS Inventory Agent";       Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/OcsPackage.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=600; Enabled=$true; UninstallMatch="OCS Inventory"}
         [PSCustomObject]@{Name="Linkus VoIP";               Url="https://github.com/Dan-Vaz/ignyz/releases/download/script/Linkus-desktop-win-setup.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=600; Enabled=$true; UninstallMatch="Linkus"}
+        # Intel Driver & Support Assistant 26.2.0.7 (assinado pela Intel).
+        # SilentArgs vazio de proposito: mesma convencao dos outros
+        # assistentes de fabricante da lista (DELL, HP) - roda com a UI
+        # visivel em vez de arriscar um switch silencioso nao documentado.
+        # UninstallMatch sem o simbolo (R) do nome real ("Intel(R) Driver &
+        # Support Assistant"): o arquivo inteiro tem que continuar ASCII.
+        [PSCustomObject]@{Name="Intel Driver & Support Assistant"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/Intel-Driver-and-Support-Assistant-Installer.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true; UninstallMatch="Driver & Support Assistant"}
     )
 }
 
