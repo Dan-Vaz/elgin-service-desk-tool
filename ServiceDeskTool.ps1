@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.34"
+$global:AppVersion    = "3.35"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -47,6 +47,10 @@ $global:AppVersion    = "3.34"
 $global:FallbackSourceUrl = "https://cdn.jsdelivr.net/gh/Dan-Vaz/elgin-service-desk-tool@master/ServiceDeskTool.ps1"
 $global:SchemaVersion = 8
 $global:ExtraSchemaVersion = 10
+# Falhas de escrita nos JSONs de configuracao, coletadas durante o startup e
+# mostradas de uma vez so antes da janela abrir (Show-ConfigPermissionWarning).
+# Existe porque essa falha era 100% invisivel - ver Test-SchemaWriteLanded.
+$global:ConfigWriteFailures = New-Object System.Collections.ArrayList
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
 $global:AssetsPath    = Join-Path $global:BasePath  "Assets"
@@ -935,6 +939,41 @@ function Reset-AppDatabaseToDefault {
 # Protege customizacoes do tecnico: se o schema do apps.json local estiver
 # desatualizado em relacao ao script, faz backup do arquivo atual antes de
 # repor a lista padrao (evita perder apps adicionados manualmente sem aviso).
+# Confirma, POR RELEITURA DO ARQUIVO, que a migracao de schema realmente
+# gravou. Nao basta o Out-File nao ter lancado excecao visivel: quando o JSON
+# pertence a "Administradores" (foi criado por uma execucao elevada) e a
+# ferramenta roda SEM elevacao, a escrita falha com UnauthorizedAccess, o
+# catch de cima so tenta registrar no log - e o log costuma ter o mesmo dono,
+# entao nem o erro consegue ser gravado. Resultado real observado em campo:
+# tecnico usando lista desatualizada sem NENHUM aviso, e as unicas pistas
+# eram os arquivos de backup se acumulando (criar arquivo novo a pasta
+# permite; sobrescrever arquivo de outro dono, nao).
+function Test-SchemaWriteLanded {
+    param([string]$Path,[int]$Expected,[string]$Rotulo)
+    try {
+        $j = Get-Content $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $v = if ($j.PSObject.Properties['SchemaVersion']) { [int]$j.SchemaVersion } else { -1 }
+        if ($v -ge $Expected) { return $true }
+    } catch {}
+    [void]$global:ConfigWriteFailures.Add($Rotulo)
+    Write-Log -Message ("[CONFIG] Nao foi possivel atualizar {0} - lista pode estar desatualizada." -f $Rotulo) -Level "ERROR"
+    return $false
+}
+
+# Avisa de uma vez so, ANTES da janela principal abrir, que a configuracao
+# nao pode ser atualizada. E MessageBox e nao Set-Status/log de proposito: a
+# UI ainda nao existe neste ponto do startup, e o log e justamente o que nao
+# esta gravando quando isso acontece.
+function Show-ConfigPermissionWarning {
+    if ($global:ConfigWriteFailures.Count -eq 0) { return }
+    $itens = ($global:ConfigWriteFailures | Select-Object -Unique) -join "`n  - "
+    $msg  = "Nao foi possivel atualizar a configuracao desta maquina:`n`n  - " + $itens
+    $msg += "`n`nO arquivo pertence a Administradores e a ferramenta esta rodando SEM permissao de escrita nele."
+    $msg += "`n`nA ferramenta abre normalmente, mas a lista de aplicativos pode estar DESATUALIZADA - itens novos podem nao aparecer."
+    $msg += "`n`nPara corrigir: feche e reabra a ferramenta como Administrador."
+    Show-Warning $msg "Configuracao desatualizada"
+}
+
 function Update-LegacyDefaultListIfNeeded {
     if (-not (Test-Path $global:ConfigFile)) { return }
     try {
@@ -944,7 +983,11 @@ function Update-LegacyDefaultListIfNeeded {
             $bkPath = Join-Path $global:ConfigPath ("apps_v{0}_{1}.json" -f $cur,(Get-Date -Format "yyyyMMdd-HHmmss"))
             Copy-Item $global:ConfigFile $bkPath -Force -EA SilentlyContinue
             Write-Log -Message ("Schema de apps.json v{0} -> v{1}. Backup em: {2}. Restaurando lista padrao." -f $cur,$global:SchemaVersion,$bkPath) -Level "WARN"
-            [void](Reset-AppDatabaseToDefault)
+            # try/catch proprio: se a gravacao explodir, a verificacao abaixo
+            # PRECISA rodar mesmo assim - e ela que transforma a falha
+            # silenciosa em aviso visivel.
+            try { [void](Reset-AppDatabaseToDefault) } catch {}
+            [void](Test-SchemaWriteLanded -Path $global:ConfigFile -Expected $global:SchemaVersion -Rotulo "Lista Padrao (apps.json)")
         }
     } catch { Write-Log -Message ("Falha ao verificar schema de apps.json: {0}" -f $_.Exception.Message) -Level "WARN" }
 }
@@ -1017,8 +1060,13 @@ function Update-LegacyExtraListIfNeeded {
             $bkPath = Join-Path $global:ConfigPath ("extra_apps_v{0}_{1}.json" -f $cur,(Get-Date -Format "yyyyMMdd-HHmmss"))
             Copy-Item $global:ExtraConfigFile $bkPath -Force -EA SilentlyContinue
             Write-Log -Message ("Schema de extra_apps.json v{0} -> v{1}. Backup em: {2}. Restaurando lista padrao." -f $cur,$global:ExtraSchemaVersion,$bkPath) -Level "WARN"
-            [PSCustomObject]@{SchemaVersion=$global:ExtraSchemaVersion; Apps=@(Get-DefaultExtraAppList)} |
-                ConvertTo-Json -Depth 5 | Out-File $global:ExtraConfigFile -Encoding UTF8 -Force
+            # try/catch proprio pelo mesmo motivo do apps.json: a verificacao
+            # abaixo tem que rodar mesmo se a gravacao falhar.
+            try {
+                [PSCustomObject]@{SchemaVersion=$global:ExtraSchemaVersion; Apps=@(Get-DefaultExtraAppList)} |
+                    ConvertTo-Json -Depth 5 | Out-File $global:ExtraConfigFile -Encoding UTF8 -Force
+            } catch {}
+            [void](Test-SchemaWriteLanded -Path $global:ExtraConfigFile -Expected $global:ExtraSchemaVersion -Rotulo "Pacote Extra (extra_apps.json)")
         }
     } catch { Write-Log -Message ("Falha ao verificar schema de extra_apps.json: {0}" -f $_.Exception.Message) -Level "WARN" }
 }
@@ -6003,5 +6051,6 @@ Import-AppDatabase
 Initialize-ExtraDatabase
 Update-LegacyExtraListIfNeeded
 Import-ExtraDatabase
+Show-ConfigPermissionWarning
 Update-Prerequisites
 Show-MainWindow
