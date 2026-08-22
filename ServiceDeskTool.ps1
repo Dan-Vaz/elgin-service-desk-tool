@@ -38,14 +38,14 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.32"
+$global:AppVersion    = "3.33"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
 # Request-AdminElevation nao tinha como montar o comando de re-execucao: a
 # ferramenta abria mas nunca conseguia virar Administrador ("SourceUrl vazia").
 $global:FallbackSourceUrl = "https://cdn.jsdelivr.net/gh/Dan-Vaz/elgin-service-desk-tool@master/ServiceDeskTool.ps1"
-$global:SchemaVersion = 7
+$global:SchemaVersion = 8
 $global:ExtraSchemaVersion = 9
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
@@ -857,9 +857,18 @@ function Get-DefaultAppList {
     $anyDeskDir = $q + (Join-Path ${env:ProgramFiles(x86)} "AnyDesk") + $q
     return @(
         [PSCustomObject]@{Name="AnyDesk"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=600; Enabled=$true; Special="AnyDeskDirect"; Url=$global:AnyDeskDownloadUrl; IsMSI=$false; Ext=".exe"; SilentArgs=@("--install",$anyDeskDir,"--start-with-win","--silent")}
-        [PSCustomObject]@{Name="RustDesk";                        Winget="RustDesk.RustDesk";             Choco="rustdesk";                Scope="";TimeoutSeconds=600; Enabled=$true}
+        # O pacote "RustDesk.RustDesk" FOI REMOVIDO do repositorio do winget -
+        # nem "winget search rustdesk" acha mais nada. Por isso a instalacao
+        # falhava sempre. Passa a baixar direto do release oficial no GitHub.
+        # URL presa a versao: ao atualizar, pegar a nova em
+        # https://api.github.com/repos/rustdesk/rustdesk/releases/latest
+        [PSCustomObject]@{Name="RustDesk"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=900; Enabled=$true; Special="DirectDownload"; Url="https://github.com/rustdesk/rustdesk/releases/download/1.4.9/rustdesk-1.4.9-x86_64.exe"; IsMSI=$false; Ext=".exe"; SilentArgs=@("--silent-install")}
         [PSCustomObject]@{Name="Microsoft Teams"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=1800; Enabled=$true; Special="TeamsBootstrapper"; Url=$global:TeamsBootstrapperUrl; IsMSI=$false; Ext=".exe"; SilentArgs=@("-p")}
-        [PSCustomObject]@{Name="Adobe Acrobat Reader";            Winget="Adobe.Acrobat.Reader.64-bit";   Choco="adobereader";             Scope="";TimeoutSeconds=900; Enabled=$true}
+        # Mesmo arquivo que o winget baixaria (a URL saiu do proprio manifesto),
+        # so que sem depender dele. ATENCAO: o instalador MUI tem ~840 MB, dai
+        # o timeout de 1h - com os 900s antigos, uma rede lenta estourava o
+        # tempo no meio do download. URL presa a versao.
+        [PSCustomObject]@{Name="Adobe Acrobat Reader"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=3600; Enabled=$true; Special="DirectDownload"; Url="https://ardownload2.adobe.com/pub/adobe/acrobat/win/AcrobatDC/2600121789/AcroRdrDCx642600121789_MUI.exe"; IsMSI=$false; Ext=".exe"; SilentArgs=@("/sAll","/rs","/msi","/norestart","/quiet","EULA_ACCEPT=YES")}
         [PSCustomObject]@{Name="Google Chrome"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=600; Enabled=$true; Special="DirectDownload"; Url="https://dl.google.com/edgedl/chrome/install/GoogleChromeStandaloneEnterprise64.msi"; IsMSI=$true; Ext=".msi"; SilentArgs=@("/qn","/norestart")}
         # Download direto do MSI oficial, mesmo padrao do Chrome: nao depende
         # de winget nem de choco, que sao a parte fragil da cadeia (o log ja
@@ -872,8 +881,17 @@ function Get-DefaultAppList {
         # rodar de novo custa pouco e ainda conserta instalacao quebrada. A
         # checagem do Chrome existe so pra nao rebaixar 100 MB toda vez.
         [PSCustomObject]@{Name="7-Zip"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=600; Enabled=$true; Special="DirectDownload"; Url="https://www.7-zip.org/a/7z2602-x64.msi"; IsMSI=$true; Ext=".msi"; SilentArgs=@("/qn","/norestart")}
-        [PSCustomObject]@{Name="Oracle Java Runtime Environment"; Winget="Oracle.JavaRuntimeEnvironment"; Choco="";                        Scope="";TimeoutSeconds=900; Enabled=$true}
-        [PSCustomObject]@{Name="Lightshot";                       Winget="Skillbrains.Lightshot";         Choco="lightshot.install";       Scope="";TimeoutSeconds=300; Enabled=$true}
+        # Java 8 (JRE) direto do javadl da Oracle - mesma URL do manifesto do
+        # winget. ~72 MB, dai o timeout maior. A URL carrega um BundleId preso
+        # a versao: ao atualizar, pegar a nova com
+        # "winget show --id Oracle.JavaRuntimeEnvironment --exact".
+        [PSCustomObject]@{Name="Oracle Java Runtime Environment"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=1800; Enabled=$true; Special="DirectDownload"; Url="https://javadl.oracle.com/webapps/download/AutoDL?BundleId=253608_2fde65a2208f40a5b5f4c844b0dff092"; IsMSI=$false; Ext=".exe"; SilentArgs=@("/s")}
+        # Lightshot e o unico dos quatro com URL PERENE (sem numero de versao),
+        # entao nao precisa de manutencao. Instalador Inno -> /VERYSILENT.
+        # Este era o caso mais enganoso: instalava quando seleciondo sozinho e
+        # falhava junto com outros, o que parecia bug do lote. Era o winget
+        # mesmo - uma invocacao isolada passava, varias seguidas nao.
+        [PSCustomObject]@{Name="Lightshot"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=600; Enabled=$true; Special="DirectDownload"; Url="https://app.prntscr.com/build/setup-lightshot.exe"; IsMSI=$false; Ext=".exe"; SilentArgs=@("/VERYSILENT","/NORESTART")}
         [PSCustomObject]@{Name="Microsoft Office (365 Apps for enterprise, pt-br)"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=5400; Enabled=$true; Special="OfficeODT"}
     )
 }
