@@ -38,14 +38,14 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.29"
+$global:AppVersion    = "3.30"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
 # Request-AdminElevation nao tinha como montar o comando de re-execucao: a
 # ferramenta abria mas nunca conseguia virar Administrador ("SourceUrl vazia").
 $global:FallbackSourceUrl = "https://cdn.jsdelivr.net/gh/Dan-Vaz/elgin-service-desk-tool@master/ServiceDeskTool.ps1"
-$global:SchemaVersion = 5
+$global:SchemaVersion = 6
 $global:ExtraSchemaVersion = 8
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
@@ -87,6 +87,20 @@ $global:BitdefenderUninstallArgs = @("/bdparams","/passbase64=RnI2OFMmcjhURiZQUW
 $global:SdioDownloadUrl  = "https://www.glenn.delahoy.com/downloads/sdio/SDIO_2.0.2.884.zip"
 $global:SdioVersion      = "2.0.2.884"
 $global:SdioApproxSizeMB = 12
+
+# Microsoft Teams: bootstrapper oficial ("Microsoft Teams Direct Installer",
+# assinado pela Microsoft). Link permanente da MS, resolve pro CDN do Office.
+#
+# POR QUE NAO E MAIS winget/choco: o pacote "Microsoft.Teams" do winget e um
+# MSIX instalado POR USUARIO. Como a ferramenta se autoeleva via UAC e nesta
+# empresa o tecnico costuma digitar uma conta ADMIN SEPARADA nesse prompt
+# (mesma raiz da armadilha do LAPS), o MSIX ia parar no perfil da conta admin
+# e nunca no perfil de quem ia usar a maquina - o winget retornava sucesso e o
+# Teams simplesmente nao aparecia. O bootstrapper com "-p" PROVISIONA o Teams
+# machine-wide (vale pra todos os usuarios), que e o metodo documentado pela
+# Microsoft pra implantacao corporativa. Exige elevacao (o proprio .exe tem
+# requireAdministrator no manifesto).
+$global:TeamsBootstrapperUrl = "https://go.microsoft.com/fwlink/?linkid=2243204"
 
 # Migracao CrowdStrike + remediacao Bitdefender (Pacote Extra -> "CrowdStrike
 # (Anti-Virus)"): baixa o BEST Uninstall Tool direto do CDN oficial da
@@ -844,7 +858,7 @@ function Get-DefaultAppList {
     return @(
         [PSCustomObject]@{Name="AnyDesk"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=600; Enabled=$true; Special="AnyDeskDirect"; Url=$global:AnyDeskDownloadUrl; IsMSI=$false; Ext=".exe"; SilentArgs=@("--install",$anyDeskDir,"--start-with-win","--silent")}
         [PSCustomObject]@{Name="RustDesk";                        Winget="RustDesk.RustDesk";             Choco="rustdesk";                Scope="";TimeoutSeconds=600; Enabled=$true}
-        [PSCustomObject]@{Name="Microsoft Teams";                 Winget="Microsoft.Teams";               Choco="microsoft-teams.install"; Scope="";TimeoutSeconds=900; Enabled=$true}
+        [PSCustomObject]@{Name="Microsoft Teams"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=1800; Enabled=$true; Special="TeamsBootstrapper"; Url=$global:TeamsBootstrapperUrl; IsMSI=$false; Ext=".exe"; SilentArgs=@("-p")}
         [PSCustomObject]@{Name="Adobe Acrobat Reader";            Winget="Adobe.Acrobat.Reader.64-bit";   Choco="adobereader";             Scope="";TimeoutSeconds=900; Enabled=$true}
         [PSCustomObject]@{Name="Google Chrome"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=600; Enabled=$true; Special="DirectDownload"; Url="https://dl.google.com/edgedl/chrome/install/GoogleChromeStandaloneEnterprise64.msi"; IsMSI=$true; Ext=".msi"; SilentArgs=@("/qn","/norestart")}
         [PSCustomObject]@{Name="7-Zip";                           Winget="7zip.7zip";                     Choco="7zip";                    Scope="";TimeoutSeconds=300; Enabled=$true}
@@ -1461,11 +1475,60 @@ function Test-AppInstalled {
     } catch { return $false }
 }
 
+# ---- MICROSOFT TEAMS (provisionamento machine-wide) ----
+# Confirma se o Teams esta provisionado PRA MAQUINA. Checa deliberadamente
+# Get-AppxProvisionedPackage e NAO Get-AppxPackage: rodando elevado com uma
+# conta admin separada (situacao normal aqui), o Get-AppxPackage responderia
+# sobre o perfil do ADMIN, e nao sobre o do tecnico que vai usar a maquina -
+# que e exatamente o engano que esta correcao existe pra desfazer.
+function Test-TeamsProvisioned {
+    try {
+        # Casa DisplayName OU PackageName, e por prefixo: o provisionado vem
+        # como "MSTeams" no DisplayName e "MSTeams_<versao>__8wekyb3d8bbwe" no
+        # PackageName. Comparar so DisplayName com "-eq" arriscaria um falso
+        # negativo - a ferramenta acusaria falha logo depois de um
+        # provisionamento que deu certo.
+        $prov = @(Get-AppxProvisionedPackage -Online -ErrorAction Stop |
+                  Where-Object { $_.DisplayName -like "MSTeams*" -or $_.PackageName -like "MSTeams*" })
+        return ($prov.Count -gt 0)
+    } catch {
+        Write-Log -Message ("[TEAMS] Nao foi possivel consultar os pacotes provisionados: {0}" -f $_.Exception.Message) -Level "WARN"
+        return $false
+    }
+}
+
+function Install-TeamsMachineWide {
+    param($App)
+    if (-not $global:IsAdmin) {
+        Write-Log -Message "[TEAMS] Requer Administrador para provisionar o Teams na maquina." -Level "WARN"
+        return $false
+    }
+    if (Test-TeamsProvisioned) {
+        Write-Log -Message "[TEAMS] Teams ja provisionado nesta maquina. Pulando." -Level "INFO"
+        return $true
+    }
+    Set-Status "Provisionando o Microsoft Teams..."
+    # Reaproveita o Install-DirectApp so pelo download robusto (curl -> IWR em
+    # processo filho -> BITS -> IWR direto) e pela espera responsiva.
+    [void](Install-DirectApp -App $App)
+    # NAO confia no ExitCode: o bootstrapper reporta o resultado real num JSON
+    # que imprime, e ja foi visto sair 0 sem provisionar. A unica confirmacao
+    # que vale e o pacote aparecer provisionado de verdade - mesmo criterio
+    # usado na remocao da Bitdefender (validar o estado, nao o exit code).
+    if (Test-TeamsProvisioned) {
+        Write-Log -Message "[TEAMS] Teams provisionado para todos os usuarios da maquina." -Level "SUCCESS"
+        return $true
+    }
+    Write-Log -Message "[TEAMS] O bootstrapper rodou mas o Teams nao aparece provisionado. Verifique os Logs." -Level "ERROR"
+    return $false
+}
+
 function Install-OnlineApp {
     param([Parameter(Mandatory=$true)]$App)
     $special=""; try{$special=[string]$App.Special}catch{$special=""}
     if ($special -eq "OfficeODT") { return (Install-OfficeViaODT -App $App) }
     if ($special -eq "AnyDeskDirect") { return (Install-AnyDeskDirect -App $App) }
+    if ($special -eq "TeamsBootstrapper") { return (Install-TeamsMachineWide -App $App) }
     if ($special -eq "DirectDownload") {
         # Install-DirectApp nao verifica "ja instalado" sozinho (generico
         # demais pra isso) - checagem pontual aqui pra nao rebaixar o MSI
