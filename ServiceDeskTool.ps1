@@ -38,14 +38,14 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.31"
+$global:AppVersion    = "3.32"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
 # Request-AdminElevation nao tinha como montar o comando de re-execucao: a
 # ferramenta abria mas nunca conseguia virar Administrador ("SourceUrl vazia").
 $global:FallbackSourceUrl = "https://cdn.jsdelivr.net/gh/Dan-Vaz/elgin-service-desk-tool@master/ServiceDeskTool.ps1"
-$global:SchemaVersion = 6
+$global:SchemaVersion = 7
 $global:ExtraSchemaVersion = 9
 $global:BasePath      = Join-Path $env:ProgramData "ElginServiceDesk"
 $global:ConfigPath    = Join-Path $global:BasePath  "Config"
@@ -861,7 +861,17 @@ function Get-DefaultAppList {
         [PSCustomObject]@{Name="Microsoft Teams"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=1800; Enabled=$true; Special="TeamsBootstrapper"; Url=$global:TeamsBootstrapperUrl; IsMSI=$false; Ext=".exe"; SilentArgs=@("-p")}
         [PSCustomObject]@{Name="Adobe Acrobat Reader";            Winget="Adobe.Acrobat.Reader.64-bit";   Choco="adobereader";             Scope="";TimeoutSeconds=900; Enabled=$true}
         [PSCustomObject]@{Name="Google Chrome"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=600; Enabled=$true; Special="DirectDownload"; Url="https://dl.google.com/edgedl/chrome/install/GoogleChromeStandaloneEnterprise64.msi"; IsMSI=$true; Ext=".msi"; SilentArgs=@("/qn","/norestart")}
-        [PSCustomObject]@{Name="7-Zip";                           Winget="7zip.7zip";                     Choco="7zip";                    Scope="";TimeoutSeconds=300; Enabled=$true}
+        # Download direto do MSI oficial, mesmo padrao do Chrome: nao depende
+        # de winget nem de choco, que sao a parte fragil da cadeia (o log ja
+        # mostrou "Winget presente mas nao respondeu" em maquina real).
+        # ATENCAO: a URL do 7-Zip e PRESA A VERSAO - diferente do Chrome, que
+        # tem link perene. Ao sair uma versao nova, atualizar o "2602" aqui
+        # (o site lista os arquivos em https://www.7-zip.org/download.html) e
+        # subir o SchemaVersion pra chegar nas maquinas.
+        # De proposito SEM checagem de "ja instalado": o MSI tem 2 MB, entao
+        # rodar de novo custa pouco e ainda conserta instalacao quebrada. A
+        # checagem do Chrome existe so pra nao rebaixar 100 MB toda vez.
+        [PSCustomObject]@{Name="7-Zip"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=600; Enabled=$true; Special="DirectDownload"; Url="https://www.7-zip.org/a/7z2602-x64.msi"; IsMSI=$true; Ext=".msi"; SilentArgs=@("/qn","/norestart")}
         [PSCustomObject]@{Name="Oracle Java Runtime Environment"; Winget="Oracle.JavaRuntimeEnvironment"; Choco="";                        Scope="";TimeoutSeconds=900; Enabled=$true}
         [PSCustomObject]@{Name="Lightshot";                       Winget="Skillbrains.Lightshot";         Choco="lightshot.install";       Scope="";TimeoutSeconds=300; Enabled=$true}
         [PSCustomObject]@{Name="Microsoft Office (365 Apps for enterprise, pt-br)"; Winget=""; Choco=""; Scope=""; TimeoutSeconds=5400; Enabled=$true; Special="OfficeODT"}
