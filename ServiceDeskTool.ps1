@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.36"
+$global:AppVersion    = "3.38"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -2947,6 +2947,18 @@ $script:XamlHead = @'
                                 <TextBlock Grid.Column="1" Text="Drivers" Style="{StaticResource SidebarNavLabel}"/>
                             </Grid>
                         </Button>
+                        <Button x:Name="NavInventario" Style="{StaticResource SidebarButton}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource SidebarNavIcon}" Background="#EC4899">
+                                    <TextBlock Text="EI" Style="{StaticResource SidebarNavIconText}"/>
+                                </Border>
+                                <TextBlock Grid.Column="1" Text="Enviar Inventario" Style="{StaticResource SidebarNavLabel}"/>
+                            </Grid>
+                        </Button>
                         <TextBlock Text="REDE" Style="{StaticResource NavGroupLabel}"/>
                         <Button x:Name="NavRede" Style="{StaticResource SidebarButton}">
                             <Grid>
@@ -4350,6 +4362,326 @@ function Invoke-DriverScanTool {
 }
 
 # ==============================================================================
+# ENVIAR INVENTARIO (aba "Enviar Inventario", grupo PRINCIPAL)
+#
+# Monta o e-mail de atualizacao da planilha de inventario: busca os dados no
+# Easy Inventory, deixa o tecnico validar/editar campo a campo, acumula varios
+# equipamentos e abre um RASCUNHO no Outlook. Nunca envia sozinho (.Send()
+# jamais - o objetivo e revisao humana antes do envio).
+#
+# TRES RESTRICOES QUE MOLDARAM O DESENHO:
+#
+# 1. RATE LIMIT DE 30s POR TOKEN. A API recusa chamadas com menos de 30s de
+#    intervalo ("Difference between request must be greater than 30 seconds").
+#    Por isso as listas completas (computadores, classes, logons) sao baixadas
+#    UMA vez e ficam em cache - em memoria e tambem em disco, pra reabrir a
+#    ferramenta nao custar mais 1min de espera. Busca por hostname depois
+#    disso e local e instantanea.
+#
+# 2. NAO PODE TRAVAR A JANELA. Sao ~60s de chamadas espacadas; fazer isso em
+#    processo congelaria o WPF inteiro. A carga roda num PROCESSO FILHO via
+#    Invoke-ManagedProcess, que ja espera de forma responsiva (ver o padrao
+#    "nao trava" do app).
+#
+# 3. O ARQUIVO PRECISA SER ASCII (armadilha #1), mas o e-mail, os rotulos e
+#    ate um nome de campo da API ("Office versao", com til) precisam de
+#    acento. Por isso os acentos sao escritos como \xNN e decodificados em
+#    runtime por Get-Acentuado.
+# ==============================================================================
+
+$global:InventarioApiBase   = "https://api.easyinventory.com.br/v1"
+$global:InventarioCacheFile = Join-Path $env:TEMP "elgin_inventario_cache.json"
+# O token da API NAO fica no codigo: este script e publicado em repositorio e
+# gist PUBLICOS, e a propria especificacao do recurso manda tratar o token como
+# segredo e nao versiona-lo. Ele e digitado uma vez por maquina e guardado no
+# perfil do usuario (LOCALAPPDATA, sempre gravavel sem elevacao - diferente do
+# ProgramData, que ja causou falha silenciosa de escrita, ver armadilha #21).
+$global:InventarioTokenFile = Join-Path $env:LOCALAPPDATA "ElginServiceDesk\inventario_token.txt"
+# Cache de disco: a API e lenta por imposicao (rate limit), entao vale reusar
+# entre execucoes. 12h e curto o bastante pra nao servir dado velho demais.
+$global:InventarioCacheHoras = 12
+$global:InventarioCache      = $null
+$global:InventarioSwCatalogo  = $null
+$global:InventarioEquipamentos = New-Object System.Collections.ArrayList
+$global:InventarioTipoSel    = $null
+$global:InventarioGrupoSel   = $null
+$global:InventarioCampoBoxes = New-Object System.Collections.ArrayList
+$global:InventarioAchouNaBase = $false
+
+# Decodifica \xNN pra caractere acentuado. Ver restricao 3 no cabecalho.
+function Get-Acentuado {
+    param([string]$Texto)
+    if ([string]::IsNullOrEmpty($Texto)) { return $Texto }
+    return [regex]::Replace($Texto, '\\x([0-9A-Fa-f]{2})', { param($m) [string][char][Convert]::ToInt32($m.Groups[1].Value,16) })
+}
+
+function Get-InventarioToken {
+    try {
+        if (Test-Path $global:InventarioTokenFile) {
+            $t = (Get-Content -LiteralPath $global:InventarioTokenFile -Raw -ErrorAction Stop).Trim()
+            if (-not [string]::IsNullOrWhiteSpace($t)) { return $t }
+        }
+    } catch {}
+    return ""
+}
+
+function Save-InventarioToken {
+    param([string]$Token)
+    try {
+        $pasta = Split-Path $global:InventarioTokenFile -Parent
+        if (-not (Test-Path $pasta)) { New-Item -ItemType Directory -Path $pasta -Force | Out-Null }
+        ([string]$Token).Trim() | Out-File -LiteralPath $global:InventarioTokenFile -Encoding ASCII -Force
+        Write-Log -Message "[INVENTARIO] Token salvo no perfil do usuario."
+        return $true
+    } catch {
+        Write-Log -Message ("[INVENTARIO] Falha ao salvar o token: {0}" -f $_.Exception.Message) -Level "ERROR"
+        return $false
+    }
+}
+
+function Get-InventarioSaudacao {
+    $h = (Get-Date).Hour
+    if ($h -ge 5 -and $h -lt 12) { return "Bom Dia" }
+    if ($h -ge 12 -and $h -lt 18) { return "Boa Tarde" }
+    return "Boa Noite"
+}
+
+# Os 5 modelos. "Campos" define a ORDEM exata das linhas no e-mail.
+function Get-InventarioTipos {
+    return @(
+        [PSCustomObject]@{ Id=1; Label="Novos Colaboradores"; Assunto=(Get-Acentuado "Atualiza\xE7\xE3o de Invent\xE1rio"); Intro="preenchimento"; PedeHostname=$true; UsuarioFixo=""; PermiteCelular=$false; PrecisaOcs=$true;
+            Campos=@((Get-Acentuado "Usu\xE1rio"),"Etiqueta","Tipo","Hostname","Windows","Office","Processador",(Get-Acentuado "Mem\xF3ria"),"OCS","Easy Inventory",(Get-Acentuado "Antiv\xEDrus"),"Criptografia","Termo digital (D4Sign)") }
+        [PSCustomObject]@{ Id=2; Label="Comum"; Assunto=(Get-Acentuado "Atualiza\xE7\xE3o de Invent\xE1rio"); Intro=(Get-Acentuado "atualiza\xE7\xE3o"); PedeHostname=$true; UsuarioFixo=""; PermiteCelular=$false; PrecisaOcs=$false;
+            Campos=@((Get-Acentuado "Usu\xE1rio"),"Modelo","Etiqueta","S/N","Tipo","Hostname","Windows","Office","Processador",(Get-Acentuado "Mem\xF3ria"),"SSD") }
+        [PSCustomObject]@{ Id=3; Label=(Get-Acentuado "Devolu\xE7\xE3o"); Assunto=(Get-Acentuado "Atualiza\xE7\xE3o de Invent\xE1rio"); Intro=(Get-Acentuado "atualiza\xE7\xE3o"); PedeHostname=$true; UsuarioFixo="Estoque"; PermiteCelular=$true; PrecisaOcs=$false;
+            Campos=@((Get-Acentuado "Usu\xE1rio"),"Modelo","Etiqueta","S/N","Tipo","Hostname","Windows","Office","Processador",(Get-Acentuado "Mem\xF3ria"),"SSD") }
+        [PSCustomObject]@{ Id=4; Label="Celular"; Assunto=(Get-Acentuado "Atualiza\xE7\xE3o de Invent\xE1rio - Celular"); Intro=(Get-Acentuado "atualiza\xE7\xE3o"); PedeHostname=$false; UsuarioFixo=""; PermiteCelular=$false; PrecisaOcs=$false;
+            Campos=@((Get-Acentuado "Usu\xE1rio"),"Modelo",(Get-Acentuado "N\xFAmero do telefone"),"ID PULSUS","IMEI","EID") }
+        [PSCustomObject]@{ Id=5; Label="Software"; Assunto=(Get-Acentuado "Atualiza\xE7\xE3o de Invent\xE1rio - Software"); Intro=(Get-Acentuado "atualiza\xE7\xE3o"); PedeHostname=$true; UsuarioFixo=""; PermiteCelular=$false; PrecisaOcs=$false;
+            Campos=@((Get-Acentuado "Usu\xE1rio"),"Etiqueta","Nome do Software",(Get-Acentuado "Chave de Licen\xE7a")) }
+    )
+}
+
+function Get-InventarioGrupos {
+    return @(
+        [PSCustomObject]@{ Id=1; Label=(Get-Acentuado "Padr\xE3o"); Para=@("edione.santos@elgin.com.br"); Cc=@("daniel.vaz@elgin.com.br","Weslley.nunes@elgin.com.br") }
+        [PSCustomObject]@{ Id=2; Label="VLO";  Para=@("edione.santos@elgin.com.br"); Cc=@("Weslley.nunes@elgin.com.br","kaua.lima@elgin.com.br","aprendiz.tisp@elgin.com.br","daniel.vaz@elgin.com.br") }
+        [PSCustomObject]@{ Id=3; Label="Mogi"; Para=@("edione.santos@elgin.com.br"); Cc=@("daniel.vaz@elgin.com.br","Weslley.nunes@elgin.com.br","marcos.filho@elgin.com.br","gabriel.alexandre@elgin.com.br","aprendiz.timc@elgin.com.br") }
+        [PSCustomObject]@{ Id=4; Label="MAO";  Para=@("edione.santos@elgin.com.br"); Cc=@("daniel.vaz@elgin.com.br","Weslley.nunes@elgin.com.br","anderson.lima@elgin.com.br","julia.moreira@elgin.com.br","aprendiz.tima@elgin.com.br","aprendiz.tima2@elgin.com.br") }
+        [PSCustomObject]@{ Id=5; Label="JUN";  Para=@("edione.santos@elgin.com.br"); Cc=@("daniel.vaz@elgin.com.br","Weslley.nunes@elgin.com.br","mateus.vicentino@elgin.com.br","aprendiz.tijund@elgin.com.br") }
+    )
+}
+
+# Baixa as listas completas num PROCESSO FILHO (ver restricao 2). O filho
+# espaca as chamadas em 31s por conta do rate limit e grava um JSON enxuto -
+# so os campos que o e-mail usa, senao seriam 1679 registros inteiros.
+function Update-InventarioCache {
+    param([switch]$IncluirSoftware)
+    $token = Get-InventarioToken
+    if ([string]::IsNullOrWhiteSpace($token)) { return $false }
+
+    $script = Join-Path $env:TEMP ("elgin_inv_fetch_{0}.ps1" -f [guid]::NewGuid().ToString("N").Substring(0,8))
+    $corpo = @'
+param([string]$Token,[string]$Saida,[string]$ComSoftware)
+$ErrorActionPreference = 'Stop'
+$base = 'https://api.easyinventory.com.br/v1'
+$ultima = $null
+function Chamar {
+    param([string]$Caminho,[hashtable]$Q)
+    # Rate limit: 1 requisicao a cada 30s por token. 31 pra folga.
+    if ($script:ultima) {
+        $passou = ((Get-Date) - $script:ultima).TotalSeconds
+        if ($passou -lt 31) { Start-Sleep -Seconds ([math]::Ceiling(31 - $passou)) }
+    }
+    $Q['token'] = $Token
+    $qs = ($Q.GetEnumerator() | ForEach-Object { "$($_.Key)=$([uri]::EscapeDataString([string]$_.Value))" }) -join '&'
+    $script:ultima = Get-Date
+    return Invoke-RestMethod -Uri ("{0}/{1}?{2}" -f $base,$Caminho,$qs) -Method Get -TimeoutSec 120
+}
+function Registros { param($R)
+    if ($null -eq $R) { return @() }
+    if ($R.PSObject.Properties.Name -contains 'records') { return @($R.records) }
+    if ($R -is [System.Array]) { return @($R) }
+    return @($R)
+}
+Write-Output "Baixando computadores..."
+$comps = Registros (Chamar -Caminho 'computer' -Q @{ page = 1 })
+Write-Output "Baixando classes de equipamento..."
+$classes = Registros (Chamar -Caminho 'equipment-class' -Q @{})
+Write-Output "Baixando logons..."
+$logons = Registros (Chamar -Caminho 'logon' -Q @{})
+
+$dicClasses = @{}; foreach ($c in $classes) { $dicClasses[[string]$c.id] = [string]$c.name }
+$dicLogons  = @{}; foreach ($l in $logons)  { $dicLogons[[string]$l.id]  = [string]$l.name }
+
+# Projeta so o necessario: o dump completo dos 1679 registros ficaria enorme.
+$enxuto = foreach ($c in $comps) {
+    $ssd = 0.0
+    foreach ($d in @($c.disks)) { if ([string]$d.type -match '(?i)ssd') { $ssd += [double]$d.total } }
+    $off = ''
+    foreach ($f in @($c.fields)) { if ([string]$f.name -match '(?i)office') { $off = [string]$f.value } }
+    [PSCustomObject]@{
+        id = $c.id; name = [string]$c.name; host = [string]$c.host; assetId = [string]$c.assetId
+        model = [string]$c.model; series = [string]$c.series; descOs = [string]$c.descOs; cpu = [string]$c.cpu
+        ram = $c.ram; antivirusName = [string]$c.antivirusName
+        idEquipmentClass = [string]$c.idEquipmentClass; idLogon = [string]$c.idLogon
+        ssdTotal = $ssd; office = $off
+    }
+}
+$saidaObj = [ordered]@{ ts = (Get-Date).ToString('o'); computers = @($enxuto); classes = $dicClasses; logons = $dicLogons; software = @{} }
+
+if ($ComSoftware -eq '1') {
+    Write-Output "Baixando catalogo de softwares (2 paginas)..."
+    $sw = @{}
+    $pagina = 1; $totalPaginas = 1
+    while ($pagina -le $totalPaginas) {
+        $r = Chamar -Caminho 'software' -Q @{ page = $pagina }
+        if ($r) {
+            if ($r.PSObject.Properties.Name -contains 'totalPages') { $totalPaginas = [int]$r.totalPages }
+            foreach ($s in (Registros $r)) { if ([string]$s.product -match '(?i)ocs inventory') { $sw[[string]$s.id] = [string]$s.product } }
+        }
+        $pagina++
+    }
+    $saidaObj.software = $sw
+}
+$saidaObj | ConvertTo-Json -Depth 6 -Compress | Out-File -LiteralPath $Saida -Encoding UTF8 -Force
+Write-Output ("OK: {0} computadores, {1} classes, {2} logons" -f @($enxuto).Count, $dicClasses.Count, $dicLogons.Count)
+'@
+    try { $corpo | Out-File -LiteralPath $script -Encoding ASCII -Force } catch { return $false }
+
+    $psExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    $comSw = if ($IncluirSoftware) { "1" } else { "0" }
+    $args  = @("-NoProfile","-ExecutionPolicy","Bypass","-File",$script,"-Token",$token,"-Saida",$global:InventarioCacheFile,"-ComSoftware",$comSw)
+    $texto = if ($IncluirSoftware) { "Baixando dados do Easy Inventory (inclui catalogo de softwares, pode levar 2-3 min)..." } else { "Baixando dados do Easy Inventory (a API limita 1 consulta a cada 30s, leve ~1 min)..." }
+    $r = Invoke-ManagedProcess -FilePath $psExe -Arguments $args -Description "[INVENTARIO] Carga do Easy Inventory" -TimeoutSeconds 900 -BusyText $texto
+    try { if (Test-Path $script) { Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue } } catch {}
+
+    if ($r.ExitCode -ne 0) {
+        Write-Log -Message ("[INVENTARIO] Carga falhou (exit {0})." -f $r.ExitCode) -Level "ERROR"
+        return $false
+    }
+    return (Import-InventarioCache)
+}
+
+function Import-InventarioCache {
+    try {
+        if (-not (Test-Path $global:InventarioCacheFile)) { return $false }
+        $j = Get-Content -LiteralPath $global:InventarioCacheFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $global:InventarioCache = $j
+        return $true
+    } catch {
+        Write-Log -Message ("[INVENTARIO] Cache ilegivel: {0}" -f $_.Exception.Message) -Level "WARN"
+        return $false
+    }
+}
+
+function Test-InventarioCacheValido {
+    param([switch]$PrecisaSoftware)
+    if ($null -eq $global:InventarioCache) { return $false }
+    try {
+        $idade = (Get-Date) - [datetime]$global:InventarioCache.ts
+        if ($idade.TotalHours -gt $global:InventarioCacheHoras) { return $false }
+    } catch { return $false }
+    if ($PrecisaSoftware) {
+        if ($null -eq $global:InventarioCache.software) { return $false }
+        if (@($global:InventarioCache.software.PSObject.Properties).Count -eq 0) { return $false }
+    }
+    return $true
+}
+
+# Garante cache valido, carregando do disco antes de sair chamando a API.
+function Confirm-InventarioCache {
+    param([switch]$PrecisaSoftware)
+    if (Test-InventarioCacheValido -PrecisaSoftware:$PrecisaSoftware) { return $true }
+    if ($null -eq $global:InventarioCache) { [void](Import-InventarioCache) }
+    if (Test-InventarioCacheValido -PrecisaSoftware:$PrecisaSoftware) { return $true }
+    return (Update-InventarioCache -IncluirSoftware:$PrecisaSoftware)
+}
+
+# Checagem de OCS: NAO da pra cachear (e por maquina) e gasta uma janela de 30s
+# do rate limit. So e chamada quando o modelo tem o campo OCS.
+function Test-InventarioTemOcs {
+    param([int]$IdComputador)
+    $token = Get-InventarioToken
+    if ([string]::IsNullOrWhiteSpace($token)) { return "" }
+    $ids = @()
+    try { $ids = @($global:InventarioCache.software.PSObject.Properties | ForEach-Object { $_.Name }) } catch { $ids = @() }
+    if ($ids.Count -eq 0) { return "" }
+    try {
+        $qs = "page=1&idComputer={0}&token={1}" -f $IdComputador, [uri]::EscapeDataString($token)
+        $r = Invoke-RestMethod -Uri ("{0}/computer/software?{1}" -f $global:InventarioApiBase,$qs) -Method Get -TimeoutSec 120
+        $recs = if ($r.PSObject.Properties.Name -contains 'records') { @($r.records) } else { @($r) }
+        foreach ($x in $recs) { if ($ids -contains ([string]$x.idSoftware)) { return "SIM" } }
+    } catch {
+        Write-Log -Message ("[INVENTARIO] Falha ao checar OCS: {0}" -f $_.Exception.Message) -Level "WARN"
+    }
+    return ""
+}
+
+# Monta o dicionario de campos a partir do cache local. Mapeamentos que exigiram
+# inspecao dos dados reais (nao estao na documentacao da API):
+#   - Etiqueta e Hostname vem de "name" (assetId fica vazio em ~49% da base);
+#   - Usuario vem do LOGON vinculado, sem o dominio (nao existe cadastro de
+#     Pessoas nesta empresa - /person volta sempre vazio);
+#   - S/N vem de "series", campo nao documentado (bate com o Service Tag Dell).
+function Get-InventarioDados {
+    param([string]$Hostname)
+    $alvo = ([string]$Hostname).Trim()
+    if ([string]::IsNullOrWhiteSpace($alvo)) { return $null }
+    $c = $null
+    foreach ($x in @($global:InventarioCache.computers)) {
+        if ($x.name -eq $alvo -or $x.host -eq $alvo -or $x.assetId -eq $alvo) { $c = $x; break }
+    }
+    if ($null -eq $c) { return $null }
+
+    $tipo = ""
+    try { $p = $global:InventarioCache.classes.PSObject.Properties[[string]$c.idEquipmentClass]; if ($p) { $tipo = [string]$p.Value } } catch {}
+    $usuario = ""
+    try { $p = $global:InventarioCache.logons.PSObject.Properties[[string]$c.idLogon]; if ($p) { $usuario = ([string]$p.Value -split '@')[0] } } catch {}
+    $memoria = ""
+    try { if ($c.ram) { $memoria = "{0}GB" -f [math]::Round([double]$c.ram) } } catch {}
+    $ssd = ""
+    try { if ($c.ssdTotal -and [double]$c.ssdTotal -gt 0) { $ssd = "{0}GB" -f [math]::Round([double]$c.ssdTotal) } } catch {}
+
+    $d = @{}
+    $d[(Get-Acentuado "Usu\xE1rio")]   = $usuario
+    $d["Modelo"]                        = [string]$c.model
+    $d["Etiqueta"]                      = [string]$c.name
+    $d["S/N"]                           = [string]$c.series
+    $d["Tipo"]                          = $tipo
+    $d["Hostname"]                      = [string]$c.name
+    $d["Windows"]                       = [string]$c.descOs
+    $d["Office"]                        = [string]$c.office
+    $d["Processador"]                   = [string]$c.cpu
+    $d[(Get-Acentuado "Mem\xF3ria")]   = $memoria
+    $d["SSD"]                           = $ssd
+    $d[(Get-Acentuado "Antiv\xEDrus")] = [string]$c.antivirusName
+    $d["__id"]                          = $c.id
+    return $d
+}
+
+# Abre o rascunho no Outlook. NUNCA .Send() - o fluxo inteiro existe pra ter
+# revisao humana antes do envio.
+function New-InventarioRascunho {
+    param([string]$Assunto,[string]$Corpo,$Grupo)
+    try {
+        $outlook = New-Object -ComObject Outlook.Application
+        $mail = $outlook.CreateItem(0)
+        $mail.To      = ($Grupo.Para -join '; ')
+        $mail.CC      = ($Grupo.Cc -join '; ')
+        $mail.Subject = $Assunto
+        $mail.Body    = $Corpo
+        $mail.Display()
+        Write-Log -Message ("[INVENTARIO] Rascunho aberto no Outlook ({0} equipamento(s), grupo {1})." -f $global:InventarioEquipamentos.Count,$Grupo.Label)
+        return $true
+    } catch {
+        Write-Log -Message ("[INVENTARIO] Falha ao abrir o Outlook: {0}" -f $_.Exception.Message) -Level "ERROR"
+        Show-ErrorBox ("Nao foi possivel abrir o Outlook.`n`n{0}" -f $_.Exception.Message)
+        return $false
+    }
+}
+
+# ==============================================================================
 # MIGRACAO CROWDSTRIKE + REMEDIACAO BITDEFENDER (Pacote Extra -> "CrowdStrike
 # (Anti-Virus)"). Portado de um script de Intune Proactive Remediation
 # (Elgin-BitDefender-Remediacao.ps1) pra dentro da acao de instalar o
@@ -5280,6 +5612,103 @@ $script:XamlPanelsD = @'
                     </ScrollViewer>
                 </Grid>
 
+                <!-- Enviar Inventario -->
+                <Grid x:Name="PanelInventario" Visibility="Collapsed">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="Enviar Inventario" Foreground="{DynamicResource BrushText}" FontSize="22" FontWeight="Bold" Margin="0,0,0,4"/>
+                    <TextBlock Grid.Row="1" Text="Coleta e envio do inventario da maquina." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,14"/>
+                    <ScrollViewer Grid.Row="2">
+                        <StackPanel>
+
+                            <Border x:Name="CardInvToken" Margin="0,0,0,12" Style="{StaticResource Card}" Visibility="Collapsed">
+                                <StackPanel>
+                                    <TextBlock Text="CONFIGURACAO NECESSARIA" Foreground="{DynamicResource BrushWarning}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <TextBlock Text="O token da API do Easy Inventory nao esta configurado nesta maquina. Ele nao vem junto com a ferramenta por ser um segredo - peca ao responsavel e cole abaixo. Fica salvo apenas no seu perfil do Windows." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBox x:Name="TxtInvToken" Width="380" Height="30" Padding="6,4" Background="{DynamicResource BrushInputBg}" Foreground="{DynamicResource BrushText}" BorderBrush="{DynamicResource BrushInputBorder}" Margin="0,0,10,0"/>
+                                        <Button x:Name="BtnInvSalvarToken" Content="Salvar token" Height="30" Width="130" Style="{StaticResource CardButton}" Background="{DynamicResource BrushWarning}"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Margin="0,0,0,12" Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="1. TIPO DE INVENTARIO" Foreground="#EC4899" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <WrapPanel>
+                                        <Button x:Name="BtnInvTipo1" Tag="1" Content="Novos Colaboradores" Height="34" Width="180" Margin="0,0,8,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                        <Button x:Name="BtnInvTipo2" Tag="2" Content="Comum" Height="34" Width="120" Margin="0,0,8,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                        <Button x:Name="BtnInvTipo3" Tag="3" Content="Devolucao" Height="34" Width="120" Margin="0,0,8,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                        <Button x:Name="BtnInvTipo4" Tag="4" Content="Celular" Height="34" Width="120" Margin="0,0,8,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                        <Button x:Name="BtnInvTipo5" Tag="5" Content="Software" Height="34" Width="120" Margin="0,0,8,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <Border x:Name="CardInvBusca" Margin="0,0,0,12" Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="2. BUSCAR NO EASY INVENTORY" Foreground="#EC4899" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <TextBlock Text="Na primeira busca a ferramenta baixa a base inteira, o que leva cerca de 1 minuto: a API so aceita uma consulta a cada 30 segundos. As buscas seguintes sao instantaneas." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <TextBox x:Name="TxtInvHostname" Width="260" Height="32" Padding="6,4" Background="{DynamicResource BrushInputBg}" Foreground="{DynamicResource BrushText}" BorderBrush="{DynamicResource BrushInputBorder}" Margin="0,0,10,0"/>
+                                        <Button x:Name="BtnInvBuscar" Content="Buscar dados" Height="32" Width="150" Style="{StaticResource CardButton}" Background="#EC4899" Margin="0,0,10,0"/>
+                                        <Button x:Name="BtnInvManual" Content="Preencher manual" Height="32" Width="150" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                    </StackPanel>
+                                    <TextBlock x:Name="TxtInvStatusBusca" Text="Digite o hostname ou a etiqueta da maquina." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border x:Name="CardInvCampos" Margin="0,0,0,12" Style="{StaticResource Card}" Visibility="Collapsed">
+                                <StackPanel>
+                                    <TextBlock Text="3. DADOS DO EQUIPAMENTO" Foreground="#EC4899" FontSize="12" FontWeight="Bold" Margin="0,0,0,4"/>
+                                    <TextBlock Text="Revise e edite o que precisar antes de adicionar. Campos em branco entram vazios no e-mail." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <StackPanel x:Name="SpInvCampos" Margin="0,0,0,6"/>
+                                    <StackPanel x:Name="SpInvCelular" Visibility="Collapsed" Margin="0,6,0,0">
+                                        <TextBlock Text="CELULAR VINCULADO A DEVOLUCAO (opcional)" Foreground="{DynamicResource BrushWarning}" FontSize="11" FontWeight="Bold" Margin="0,0,0,8"/>
+                                        <StackPanel x:Name="SpInvCelularCampos"/>
+                                    </StackPanel>
+                                    <TextBlock Text="Obs" Foreground="{DynamicResource BrushTextMuted}" FontSize="11" Margin="0,8,0,4"/>
+                                    <TextBox x:Name="TxtInvObs" Height="52" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Padding="6,4" Background="{DynamicResource BrushInputBg}" Foreground="{DynamicResource BrushText}" BorderBrush="{DynamicResource BrushInputBorder}" Margin="0,0,0,10"/>
+                                    <Button x:Name="BtnInvAdicionar" Content="Adicionar a lista" Height="36" Width="200" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="#22C55E"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Margin="0,0,0,12" Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock x:Name="TxtInvTituloLista" Text="4. EQUIPAMENTOS NO E-MAIL (0)" Foreground="#EC4899" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <TextBlock x:Name="TxtInvLista" Text="Nenhum equipamento adicionado ainda." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button x:Name="BtnInvRemoverUltimo" Content="Remover ultimo" Height="32" Width="150" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" Margin="0,0,8,0"/>
+                                        <Button x:Name="BtnInvLimpar" Content="Limpar lista" Height="32" Width="150" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Margin="0,0,0,12" Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="5. DESTINATARIOS" Foreground="#EC4899" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <WrapPanel Margin="0,0,0,8">
+                                        <Button x:Name="BtnInvGrupo1" Tag="1" Content="Padrao" Height="34" Width="110" Margin="0,0,8,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                        <Button x:Name="BtnInvGrupo2" Tag="2" Content="VLO" Height="34" Width="110" Margin="0,0,8,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                        <Button x:Name="BtnInvGrupo3" Tag="3" Content="Mogi" Height="34" Width="110" Margin="0,0,8,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                        <Button x:Name="BtnInvGrupo4" Tag="4" Content="MAO" Height="34" Width="110" Margin="0,0,8,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                        <Button x:Name="BtnInvGrupo5" Tag="5" Content="JUN" Height="34" Width="110" Margin="0,0,8,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                    </WrapPanel>
+                                    <TextBlock x:Name="TxtInvDestinatarios" Text="Selecione um grupo para ver os destinatarios." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Margin="0,0,0,12" Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="6. GERAR" Foreground="#EC4899" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <TextBlock Text="Abre um rascunho no Outlook com Para, Cc, Assunto e Corpo preenchidos. O envio continua sendo manual - a ferramenta nunca envia sozinha." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <Button x:Name="BtnInvGerar" Content="Gerar rascunho no Outlook" Height="38" Width="260" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="#EC4899"/>
+                                </StackPanel>
+                            </Border>
+
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+
                 <!-- Ferramentas -->
                 <Grid x:Name="PanelFerramentas" Visibility="Collapsed">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
@@ -5388,6 +5817,7 @@ function Show-MainWindow {
         Checklist = $window.FindName("PanelChecklist")
         Instalar  = $window.FindName("PanelInstalar")
         Drivers   = $window.FindName("PanelDrivers")
+        Inventario = $window.FindName("PanelInventario")
         Diagnostico = $window.FindName("PanelDiagnostico")
         Rede      = $window.FindName("PanelRede")
         Impressao = $window.FindName("PanelImpressao")
@@ -5400,6 +5830,7 @@ function Show-MainWindow {
         Checklist = $window.FindName("NavChecklist")
         Instalar  = $window.FindName("NavInstalar")
         Drivers   = $window.FindName("NavDrivers")
+        Inventario = $window.FindName("NavInventario")
         Diagnostico = $window.FindName("NavDiagnostico")
         Rede      = $window.FindName("NavRede")
         Impressao = $window.FindName("NavImpressao")
@@ -5408,7 +5839,7 @@ function Show-MainWindow {
         Logs      = $window.FindName("NavLogs")
     }
     $panelTitles = @{
-        Inicio="Inicio"; Checklist="Checklist"; Instalar="Instalar Aplicativos"; Drivers="Drivers"
+        Inicio="Inicio"; Checklist="Checklist"; Instalar="Instalar Aplicativos"; Drivers="Drivers"; Inventario="Enviar Inventario"
         Diagnostico="Diagnostico"; Rede="Rede"; Impressao="Impressao"; Limpeza="Limpeza e Otimizacao"
         Ferramentas="Ferramentas"; Logs="Logs"
     }
@@ -5445,6 +5876,7 @@ function Show-MainWindow {
         @{ Key="Checklist";   Title="Checklist";            Desc="Formatacao e configuracao passo a passo";                     Categoria="Setup";         Mono="CK"; Cor="#4C6FFF" }
         @{ Key="Instalar";    Title="Instalar Aplicativos";  Desc="Lista padrao, busca winget/choco e Pacote Extra";             Categoria="Instalacao";    Mono="IN"; Cor="#22C55E" }
         @{ Key="Drivers";     Title="Drivers";               Desc="Escaneia e baixa drivers faltantes (Snappy Driver Installer)"; Categoria="Instalacao";    Mono="DR"; Cor="#F97316" }
+        @{ Key="Inventario";  Title="Enviar Inventario";     Desc="Coleta e envio do inventario da maquina";                     Categoria="Instalacao";    Mono="EI"; Cor="#EC4899" }
         @{ Key="Diagnostico"; Title="Diagnostico";           Desc="Relatorio do sistema, ativacao do Windows/Office e boot";     Categoria="Diagnostico";   Mono="DG"; Cor="#2563EB" }
         @{ Key="Rede";        Title="Rede";                  Desc="DNS, IP, Winsock, Wi-Fi, conexoes e unidades mapeadas";       Categoria="Diagnostico";   Mono="RD"; Cor="#0EA5E9" }
         @{ Key="Impressao";   Title="Impressao";             Desc="Spooler, monitor SNMP e gerenciamento de impressoras";        Categoria="Equipamentos";  Mono="IP"; Cor="#7C6FFA" }
@@ -6012,6 +6444,244 @@ function Show-MainWindow {
 
     # ---- Drivers ----
     $window.FindName("BtnScanDrivers").Add_Click({ Invoke-DriverScanTool }.GetNewClosure())
+
+    # ---- Enviar Inventario ----
+    $spInvCampos    = $window.FindName("SpInvCampos")
+    $spInvCelular   = $window.FindName("SpInvCelular")
+    $spInvCelCampos = $window.FindName("SpInvCelularCampos")
+    $cardInvCampos  = $window.FindName("CardInvCampos")
+    $cardInvBusca   = $window.FindName("CardInvBusca")
+    $cardInvToken   = $window.FindName("CardInvToken")
+    $txtInvHost     = $window.FindName("TxtInvHostname")
+    $txtInvStatus   = $window.FindName("TxtInvStatusBusca")
+    $txtInvObs      = $window.FindName("TxtInvObs")
+    $txtInvLista    = $window.FindName("TxtInvLista")
+    $txtInvTitLista = $window.FindName("TxtInvTituloLista")
+    $txtInvDest     = $window.FindName("TxtInvDestinatarios")
+    $tiposInv       = Get-InventarioTipos
+    $gruposInv      = Get-InventarioGrupos
+    $btnsInvTipo    = @(1..5 | ForEach-Object { $window.FindName("BtnInvTipo$_") })
+    $btnsInvGrupo   = @(1..5 | ForEach-Object { $window.FindName("BtnInvGrupo$_") })
+    $global:InventarioCelBoxes = New-Object System.Collections.ArrayList
+
+    # Rotulos com acento vem do codigo, nao do XAML: o arquivo inteiro precisa
+    # ser ASCII, entao "Devolucao" no XAML vira "Devolu\xE7\xE3o" aqui.
+    for ($i = 0; $i -lt 5; $i++) { $btnsInvTipo[$i].Content = $tiposInv[$i].Label }
+    for ($i = 0; $i -lt 5; $i++) { $btnsInvGrupo[$i].Content = $gruposInv[$i].Label }
+    if ([string]::IsNullOrWhiteSpace((Get-InventarioToken))) { $cardInvToken.Visibility = "Visible" }
+
+    # Cria uma linha "rotulo + caixa de texto" e devolve a caixa. O rotulo fica
+    # no Tag da caixa, que e como o valor e recuperado depois sem depender de
+    # variavel de loop capturada (armadilha conhecida de closure).
+    $InvCriaLinha = {
+        param($Painel,[string]$Rotulo,[string]$Valor)
+        $g = New-Object System.Windows.Controls.Grid
+        $g.Margin = New-Object System.Windows.Thickness(0,0,0,6)
+        $c1 = New-Object System.Windows.Controls.ColumnDefinition
+        $c1.Width = New-Object System.Windows.GridLength(185)
+        $c2 = New-Object System.Windows.Controls.ColumnDefinition
+        [void]$g.ColumnDefinitions.Add($c1)
+        [void]$g.ColumnDefinitions.Add($c2)
+        $lb = New-Object System.Windows.Controls.TextBlock
+        $lb.Text = $Rotulo
+        $lb.FontSize = 11
+        $lb.VerticalAlignment = "Center"
+        $lb.Foreground = Get-ThemeBrush "BrushTextMuted"
+        [System.Windows.Controls.Grid]::SetColumn($lb,0)
+        $tb = New-Object System.Windows.Controls.TextBox
+        $tb.Text = $Valor
+        $tb.Height = 28
+        $tb.FontSize = 12
+        $tb.Padding = New-Object System.Windows.Thickness(6,3,6,3)
+        $tb.Background  = Get-ThemeBrush "BrushInputBg"
+        $tb.Foreground  = Get-ThemeBrush "BrushText"
+        $tb.BorderBrush = Get-ThemeBrush "BrushInputBorder"
+        $tb.Tag = $Rotulo
+        [System.Windows.Controls.Grid]::SetColumn($tb,1)
+        [void]$g.Children.Add($lb)
+        [void]$g.Children.Add($tb)
+        [void]$Painel.Children.Add($g)
+        return $tb
+    }.GetNewClosure()
+
+    $InvMontaCampos = {
+        param($Tipo,$Dados)
+        $spInvCampos.Children.Clear()
+        $spInvCelCampos.Children.Clear()
+        $global:InventarioCampoBoxes.Clear()
+        $global:InventarioCelBoxes.Clear()
+        $rotUsuario = Get-Acentuado "Usu\xE1rio"
+        foreach ($campo in $Tipo.Campos) {
+            $valor = ""
+            if ($campo -eq "Easy Inventory") {
+                $valor = if ($global:InventarioAchouNaBase) { "SIM" } else { Get-Acentuado "N\xC3O" }
+            } elseif ($Dados -ne $null -and $Dados.ContainsKey($campo)) {
+                $valor = [string]$Dados[$campo]
+            }
+            # Devolucao sempre entra como "Estoque", mas continua editavel.
+            if (-not [string]::IsNullOrWhiteSpace($Tipo.UsuarioFixo) -and $campo -eq $rotUsuario) { $valor = $Tipo.UsuarioFixo }
+            $cx = & $InvCriaLinha -Painel $spInvCampos -Rotulo $campo -Valor $valor
+            [void]$global:InventarioCampoBoxes.Add($cx)
+        }
+        if ($Tipo.PermiteCelular) {
+            foreach ($rot in @("Celular Modelo",(Get-Acentuado "N\xFAmero"),"ID Pulsus","IMEI")) {
+                $cx = & $InvCriaLinha -Painel $spInvCelCampos -Rotulo $rot -Valor ""
+                [void]$global:InventarioCelBoxes.Add($cx)
+            }
+            $spInvCelular.Visibility = "Visible"
+        } else {
+            $spInvCelular.Visibility = "Collapsed"
+        }
+        $txtInvObs.Text = ""
+        $cardInvCampos.Visibility = "Visible"
+    }.GetNewClosure()
+
+    $InvAtualizaLista = {
+        $n = $global:InventarioEquipamentos.Count
+        $txtInvTitLista.Text = "4. EQUIPAMENTOS NO E-MAIL ({0})" -f $n
+        if ($n -eq 0) {
+            $txtInvLista.Text = "Nenhum equipamento adicionado ainda."
+        } else {
+            $resumo = @()
+            for ($i = 0; $i -lt $n; $i++) { $resumo += ("{0}. {1}" -f ($i+1), $global:InventarioEquipamentos[$i].Resumo) }
+            $txtInvLista.Text = $resumo -join "`n"
+        }
+    }.GetNewClosure()
+
+    $InvSelecionaTipo = {
+        param([int]$Id)
+        $global:InventarioTipoSel = $tiposInv | Where-Object { $_.Id -eq $Id } | Select-Object -First 1
+        foreach ($b in $btnsInvTipo) {
+            if ([int]$b.Tag -eq $Id) { $b.Background = Get-Brush "#EC4899"; $b.Foreground = Get-Brush "#FFFFFF" }
+            else { $b.Background = Get-ThemeBrush "BrushBorder"; $b.Foreground = Get-ThemeBrush "BrushText" }
+        }
+        $global:InventarioAchouNaBase = $false
+        # Celular nao consulta o Easy Inventory: e tudo manual.
+        if ($global:InventarioTipoSel.PedeHostname) {
+            $cardInvBusca.Visibility = "Visible"
+            $cardInvCampos.Visibility = "Collapsed"
+            $txtInvStatus.Text = "Digite o hostname ou a etiqueta da maquina."
+        } else {
+            $cardInvBusca.Visibility = "Collapsed"
+            & $InvMontaCampos -Tipo $global:InventarioTipoSel -Dados $null
+        }
+    }.GetNewClosure()
+
+    foreach ($b in $btnsInvTipo) { $b.Add_Click({ & $InvSelecionaTipo -Id ([int]$this.Tag) }.GetNewClosure()) }
+
+    foreach ($b in $btnsInvGrupo) {
+        $b.Add_Click({
+            $id = [int]$this.Tag
+            $global:InventarioGrupoSel = $gruposInv | Where-Object { $_.Id -eq $id } | Select-Object -First 1
+            foreach ($x in $btnsInvGrupo) {
+                if ([int]$x.Tag -eq $id) { $x.Background = Get-Brush "#EC4899"; $x.Foreground = Get-Brush "#FFFFFF" }
+                else { $x.Background = Get-ThemeBrush "BrushBorder"; $x.Foreground = Get-ThemeBrush "BrushText" }
+            }
+            $txtInvDest.Text = ("Para: {0}`nCc: {1}" -f ($global:InventarioGrupoSel.Para -join '; '), ($global:InventarioGrupoSel.Cc -join '; '))
+        }.GetNewClosure())
+    }
+
+    $window.FindName("BtnInvSalvarToken").Add_Click({
+        $t = $window.FindName("TxtInvToken").Text
+        if ([string]::IsNullOrWhiteSpace($t)) { Show-Warning "Cole o token antes de salvar."; return }
+        if (Save-InventarioToken -Token $t) { $cardInvToken.Visibility = "Collapsed"; Show-Info "Token salvo. Ele fica apenas neste perfil do Windows." }
+        else { Show-Warning "Nao foi possivel salvar o token. Verifique os Logs." }
+    }.GetNewClosure())
+
+    $window.FindName("BtnInvBuscar").Add_Click({
+        if ($global:InventarioTipoSel -eq $null) { Show-Warning "Escolha primeiro o tipo de inventario."; return }
+        if ([string]::IsNullOrWhiteSpace((Get-InventarioToken))) { $cardInvToken.Visibility = "Visible"; Show-Warning "Configure o token da API do Easy Inventory antes de buscar."; return }
+        $alvo = $txtInvHost.Text.Trim()
+        if ([string]::IsNullOrWhiteSpace($alvo)) { Show-Warning "Digite o hostname ou a etiqueta."; return }
+        $precisaSw = [bool]$global:InventarioTipoSel.PrecisaOcs
+        if (-not (Confirm-InventarioCache -PrecisaSoftware:$precisaSw)) {
+            $txtInvStatus.Text = "Nao foi possivel baixar os dados do Easy Inventory. Verifique os Logs ou preencha manualmente."
+            Show-Warning "Falha ao consultar o Easy Inventory. Voce ainda pode preencher os campos manualmente."
+            return
+        }
+        $dados = Get-InventarioDados -Hostname $alvo
+        $global:InventarioAchouNaBase = ($dados -ne $null)
+        if ($dados -eq $null) {
+            $txtInvStatus.Text = ("'{0}' nao foi encontrado na base. Os campos abrem em branco para preenchimento manual." -f $alvo)
+        } else {
+            # OCS custa 1 chamada por maquina (nao cacheavel), entao so roda nos
+            # modelos que realmente tem o campo.
+            if ($precisaSw -and $dados["__id"]) {
+                $ov = Show-BusyOverlay -Text "Checando OCS nesta maquina (a API exige 30s entre consultas)..."
+                try { $dados["OCS"] = Test-InventarioTemOcs -IdComputador ([int]$dados["__id"]) } finally { Close-BusyOverlay -Overlay $ov }
+            }
+            $txtInvStatus.Text = ("Encontrado: {0}" -f $alvo)
+        }
+        & $InvMontaCampos -Tipo $global:InventarioTipoSel -Dados $dados
+    }.GetNewClosure())
+
+    $window.FindName("BtnInvManual").Add_Click({
+        if ($global:InventarioTipoSel -eq $null) { Show-Warning "Escolha primeiro o tipo de inventario."; return }
+        $global:InventarioAchouNaBase = $false
+        $txtInvStatus.Text = "Preenchimento manual - nenhuma consulta ao Easy Inventory."
+        & $InvMontaCampos -Tipo $global:InventarioTipoSel -Dados $null
+    }.GetNewClosure())
+
+    $window.FindName("BtnInvAdicionar").Add_Click({
+        if ($global:InventarioTipoSel -eq $null) { Show-Warning "Escolha primeiro o tipo de inventario."; return }
+        if ($global:InventarioCampoBoxes.Count -eq 0) { Show-Warning "Nenhum campo carregado."; return }
+        $linhas = @()
+        foreach ($cx in $global:InventarioCampoBoxes) { $linhas += ("{0}: {1}" -f [string]$cx.Tag, [string]$cx.Text) }
+        $bloco = $linhas -join "`r`n"
+        if ($global:InventarioTipoSel.PermiteCelular -and $global:InventarioCelBoxes.Count -gt 0) {
+            $preenchido = $false
+            foreach ($cx in $global:InventarioCelBoxes) { if (-not [string]::IsNullOrWhiteSpace($cx.Text)) { $preenchido = $true } }
+            if ($preenchido) {
+                $celLinhas = @()
+                foreach ($cx in $global:InventarioCelBoxes) { $celLinhas += ("{0}: {1}" -f [string]$cx.Tag, [string]$cx.Text) }
+                $bloco += "`r`n`r`n" + ($celLinhas -join "`r`n")
+            }
+        }
+        $bloco += "`r`n`r`nObs: " + $txtInvObs.Text.Trim()
+        $resumo = "{0} - {1}" -f $global:InventarioTipoSel.Label, [string]$global:InventarioCampoBoxes[0].Text
+        [void]$global:InventarioEquipamentos.Add([PSCustomObject]@{ Bloco=$bloco; Assunto=$global:InventarioTipoSel.Assunto; Intro=$global:InventarioTipoSel.Intro; Resumo=$resumo })
+        & $InvAtualizaLista
+        $cardInvCampos.Visibility = "Collapsed"
+        $txtInvHost.Text = ""
+        $txtInvStatus.Text = "Equipamento adicionado. Escolha o tipo do proximo ou gere o rascunho."
+        Set-Status ("Inventario: {0} equipamento(s) na lista." -f $global:InventarioEquipamentos.Count)
+    }.GetNewClosure())
+
+    $window.FindName("BtnInvRemoverUltimo").Add_Click({
+        if ($global:InventarioEquipamentos.Count -eq 0) { return }
+        $global:InventarioEquipamentos.RemoveAt($global:InventarioEquipamentos.Count - 1)
+        & $InvAtualizaLista
+    }.GetNewClosure())
+
+    $window.FindName("BtnInvLimpar").Add_Click({
+        if ($global:InventarioEquipamentos.Count -eq 0) { return }
+        if (-not (Confirm-Action "Remover todos os equipamentos da lista?" "Enviar Inventario")) { return }
+        $global:InventarioEquipamentos.Clear()
+        & $InvAtualizaLista
+    }.GetNewClosure())
+
+    $window.FindName("BtnInvGerar").Add_Click({
+        if ($global:InventarioEquipamentos.Count -eq 0) { Show-Warning "Adicione pelo menos um equipamento."; return }
+        if ($global:InventarioGrupoSel -eq $null) { Show-Warning "Escolha o grupo de destinatarios."; return }
+        $assuntos = @($global:InventarioEquipamentos | ForEach-Object { $_.Assunto } | Select-Object -Unique)
+        $assunto  = $assuntos -join " / "
+        $intros   = @($global:InventarioEquipamentos | ForEach-Object { $_.Intro } | Select-Object -Unique)
+        $intro    = if ($intros.Count -eq 1) { $intros[0] } else { Get-Acentuado "atualiza\xE7\xE3o" }
+        $sep      = "---------------------------------------------------------"
+        $corpo    = (Get-Acentuado "{0}, Segue informa\xE7\xF5es para {1} da planilha de invent\xE1rio") -f (Get-InventarioSaudacao), $intro
+        $corpo   += "`r`n`r`n" + ((@($global:InventarioEquipamentos | ForEach-Object { $_.Bloco })) -join ("`r`n`r`n" + $sep + "`r`n`r`n"))
+        if (New-InventarioRascunho -Assunto $assunto -Corpo $corpo -Grupo $global:InventarioGrupoSel) {
+            # Assuntos diferentes no mesmo e-mail nao e erro, mas o tecnico
+            # precisa saber que o assunto saiu concatenado.
+            if ($assuntos.Count -gt 1) {
+                Show-Info ("Rascunho aberto no Outlook.`n`nOs equipamentos usam assuntos diferentes, entao o assunto saiu unido:`n{0}`n`nAjuste no Outlook antes de enviar, se precisar." -f $assunto)
+            } else {
+                Show-Info "Rascunho aberto no Outlook. Revise e envie manualmente."
+            }
+        }
+    }.GetNewClosure())
+
+    & $InvAtualizaLista
     $window.FindName("BtnChkdsk").Add_Click({ Invoke-ChkdskScheduled -Drive "C:" }.GetNewClosure())
     $window.FindName("BtnMaxPerformance").Add_Click({ Enable-MaxPerformancePowerPlan }.GetNewClosure())
 
