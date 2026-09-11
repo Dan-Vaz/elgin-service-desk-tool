@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.41"
+$global:AppVersion    = "3.42"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -88,10 +88,6 @@ $global:FormIcon      = $null
 $global:AnyDeskDownloadUrl        = "https://download.anydesk.com/AnyDesk.exe"
 $global:AnyDeskUnattendedPassword = '$uP0rt&__22'
 
-# Desinstalador oficial do Bitdefender GravityZone (BEST Uninstall Tool) -
-# usado pela ferramenta separada em Ferramentas ("Desinstalador do Bitdefender").
-$global:BitdefenderUninstallUrl  = "https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/BEST_uninstallTool.exe"
-$global:BitdefenderUninstallArgs = @("/bdparams","/passbase64=RnI2OFMmcjhURiZQUWpieQ==","/noWait")
 
 # Snappy Driver Installer Origin (SDIO) - ferramenta portable de scan e
 # download de drivers usada pela aba "Drivers". O zip oficial e publicado pelo
@@ -4223,20 +4219,6 @@ $script:UninstallerDialogXaml = @'
 # Desinstalador oficial do Bitdefender GravityZone (BEST Uninstall Tool) -
 # reaproveita Install-DirectApp (baixa + roda com os argumentos de
 # desinstalacao), mesmo mecanismo generico ja usado no Pacote Extra.
-function Invoke-BitdefenderUninstall {
-    if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
-    if (-not (Confirm-Action "Isso vai baixar e executar o desinstalador oficial do Bitdefender (BEST Uninstall Tool) nesta maquina. Continuar?" "Desinstalador do Bitdefender")) { return }
-    $app = [PSCustomObject]@{
-        Name           = "Bitdefender (Desinstalador)"
-        Url            = $global:BitdefenderUninstallUrl
-        SilentArgs     = $global:BitdefenderUninstallArgs
-        Ext            = ".exe"
-        IsMSI          = $false
-        TimeoutSeconds = 600
-    }
-    if (Install-DirectApp -App $app) { Show-Info "Desinstalador do Bitdefender executado." }
-    else { Show-Warning "Falha ao executar o desinstalador do Bitdefender. Verifique os Logs." }
-}
 
 # ==============================================================================
 # DRIVERS - Snappy Driver Installer Origin (SDIO)
@@ -5709,20 +5691,11 @@ $script:XamlPanelsD = @'
                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
                             <!-- DESINSTALADOR SEGURO -->
-                            <Border Grid.Row="0" Grid.Column="0" Margin="0,0,5,12" Style="{StaticResource Card}">
+                            <Border Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,0,0,12" Style="{StaticResource Card}">
                                 <StackPanel>
                                     <TextBlock Text="DESINSTALADOR SEGURO" Foreground="{DynamicResource BrushDanger}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
                                     <TextBlock Text="Desinstala o programa e depois procura residuos (pastas e chaves de registro) deixados para tras, igual o Revo Uninstaller - voce revisa e escolhe o que apagar." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
                                     <Button x:Name="BtnUninstaller" Content="Desinstalador Seguro" Height="38" Width="240" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}"/>
-                                </StackPanel>
-                            </Border>
-
-                            <!-- DESINSTALADOR DO BITDEFENDER -->
-                            <Border Grid.Row="0" Grid.Column="1" Margin="5,0,0,12" Style="{StaticResource Card}">
-                                <StackPanel>
-                                    <TextBlock Text="DESINSTALADOR DO BITDEFENDER" Foreground="{DynamicResource BrushWarning}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
-                                    <TextBlock Text="Baixa e roda o desinstalador oficial da Bitdefender (BEST Uninstall Tool) com os parametros de desinstalacao silenciosa - ferramenta separada, nao passa pelo Desinstalador Seguro." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
-                                    <Button x:Name="BtnDesinstalarBitdefender" Content="Desinstalador do Bitdefender" Height="38" Width="240" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushWarning}"/>
                                 </StackPanel>
                             </Border>
 
@@ -6428,7 +6401,6 @@ function Show-MainWindow {
         if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
         Show-UninstallerDialog
     }.GetNewClosure())
-    $window.FindName("BtnDesinstalarBitdefender").Add_Click({ Invoke-BitdefenderUninstall }.GetNewClosure())
     $window.FindName("BtnPegarSenhaLaps").Add_Click({ Invoke-LapsPasswordLookup }.GetNewClosure())
 
     # ---- Drivers ----
