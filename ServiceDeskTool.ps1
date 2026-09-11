@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.38"
+$global:AppVersion    = "3.39"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -4391,11 +4391,20 @@ function Invoke-DriverScanTool {
 
 $global:InventarioApiBase   = "https://api.easyinventory.com.br/v1"
 $global:InventarioCacheFile = Join-Path $env:TEMP "elgin_inventario_cache.json"
-# O token da API NAO fica no codigo: este script e publicado em repositorio e
-# gist PUBLICOS, e a propria especificacao do recurso manda tratar o token como
-# segredo e nao versiona-lo. Ele e digitado uma vez por maquina e guardado no
-# perfil do usuario (LOCALAPPDATA, sempre gravavel sem elevacao - diferente do
-# ProgramData, que ja causou falha silenciosa de escrita, ver armadilha #21).
+# ATENCAO - TOKEN EM TEXTO PURO NUM REPOSITORIO PUBLICO.
+# A especificacao original do recurso pede pra tratar este token como segredo e
+# nao versiona-lo. O repo e o gist desta ferramenta sao publicos, entao embutir
+# aqui significa que QUALQUER PESSOA consegue ler a base de inventario inteira
+# (1680 maquinas, com usuario, modelo e numero de serie). O risco foi levantado
+# e a decisao de embutir assim mesmo foi do usuario, consciente - mesma escolha
+# ja feita pro CID do CrowdStrike, algumas linhas acima.
+# Se algum dia esse token for rotacionado no Easy Inventory, o valor daqui para
+# de funcionar pra todo mundo ate sair uma versao nova. Por isso existe a
+# sobrescrita local abaixo: ela permite consertar uma maquina na hora, sem
+# depender de republicacao.
+$global:InventarioApiTokenPadrao = "e6a66fb9-1e12-43ff-b9f4-66b9df01c339"
+# Sobrescrita opcional por maquina. Fica em LOCALAPPDATA e nao no ProgramData
+# porque aquele e sempre gravavel sem elevacao (ver armadilha #21).
 $global:InventarioTokenFile = Join-Path $env:LOCALAPPDATA "ElginServiceDesk\inventario_token.txt"
 # Cache de disco: a API e lenta por imposicao (rate limit), entao vale reusar
 # entre execucoes. 12h e curto o bastante pra nao servir dado velho demais.
@@ -4415,6 +4424,9 @@ function Get-Acentuado {
     return [regex]::Replace($Texto, '\\x([0-9A-Fa-f]{2})', { param($m) [string][char][Convert]::ToInt32($m.Groups[1].Value,16) })
 }
 
+# A sobrescrita local vem ANTES do token embutido: assim, se o token publicado
+# for rotacionado ou revogado, da pra destravar uma maquina colando o novo na
+# propria aba, sem esperar uma versao nova da ferramenta.
 function Get-InventarioToken {
     try {
         if (Test-Path $global:InventarioTokenFile) {
@@ -4422,7 +4434,7 @@ function Get-InventarioToken {
             if (-not [string]::IsNullOrWhiteSpace($t)) { return $t }
         }
     } catch {}
-    return ""
+    return $global:InventarioApiTokenPadrao
 }
 
 function Save-InventarioToken {
@@ -5622,8 +5634,8 @@ $script:XamlPanelsD = @'
 
                             <Border x:Name="CardInvToken" Margin="0,0,0,12" Style="{StaticResource Card}" Visibility="Collapsed">
                                 <StackPanel>
-                                    <TextBlock Text="CONFIGURACAO NECESSARIA" Foreground="{DynamicResource BrushWarning}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
-                                    <TextBlock Text="O token da API do Easy Inventory nao esta configurado nesta maquina. Ele nao vem junto com a ferramenta por ser um segredo - peca ao responsavel e cole abaixo. Fica salvo apenas no seu perfil do Windows." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <TextBlock Text="TOKEN DA API" Foreground="{DynamicResource BrushWarning}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <TextBlock Text="A consulta ao Easy Inventory falhou. Se o token da API tiver sido trocado, cole o novo abaixo para destravar esta maquina agora, sem depender de uma atualizacao da ferramenta. Ele fica salvo apenas no seu perfil do Windows." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
                                     <StackPanel Orientation="Horizontal">
                                         <TextBox x:Name="TxtInvToken" Width="380" Height="30" Padding="6,4" Background="{DynamicResource BrushInputBg}" Foreground="{DynamicResource BrushText}" BorderBrush="{DynamicResource BrushInputBorder}" Margin="0,0,10,0"/>
                                         <Button x:Name="BtnInvSalvarToken" Content="Salvar token" Height="30" Width="130" Style="{StaticResource CardButton}" Background="{DynamicResource BrushWarning}"/>
@@ -6468,7 +6480,8 @@ function Show-MainWindow {
     # ser ASCII, entao "Devolucao" no XAML vira "Devolu\xE7\xE3o" aqui.
     for ($i = 0; $i -lt 5; $i++) { $btnsInvTipo[$i].Content = $tiposInv[$i].Label }
     for ($i = 0; $i -lt 5; $i++) { $btnsInvGrupo[$i].Content = $gruposInv[$i].Label }
-    if ([string]::IsNullOrWhiteSpace((Get-InventarioToken))) { $cardInvToken.Visibility = "Visible" }
+    # O card do token fica escondido: o token ja vem embutido. Ele so aparece se
+    # uma consulta falhar, que e o unico momento em que trocar o token resolve.
 
     # Cria uma linha "rotulo + caixa de texto" e devolve a caixa. O rotulo fica
     # no Tag da caixa, que e como o valor e recuperado depois sem depender de
@@ -6590,11 +6603,13 @@ function Show-MainWindow {
 
     $window.FindName("BtnInvBuscar").Add_Click({
         if ($global:InventarioTipoSel -eq $null) { Show-Warning "Escolha primeiro o tipo de inventario."; return }
-        if ([string]::IsNullOrWhiteSpace((Get-InventarioToken))) { $cardInvToken.Visibility = "Visible"; Show-Warning "Configure o token da API do Easy Inventory antes de buscar."; return }
         $alvo = $txtInvHost.Text.Trim()
         if ([string]::IsNullOrWhiteSpace($alvo)) { Show-Warning "Digite o hostname ou a etiqueta."; return }
         $precisaSw = [bool]$global:InventarioTipoSel.PrecisaOcs
         if (-not (Confirm-InventarioCache -PrecisaSoftware:$precisaSw)) {
+            # Token trocado/revogado e a causa mais provavel, entao o campo de
+            # sobrescrita aparece aqui - e o unico momento em que ele resolve.
+            $cardInvToken.Visibility = "Visible"
             $txtInvStatus.Text = "Nao foi possivel baixar os dados do Easy Inventory. Verifique os Logs ou preencha manualmente."
             Show-Warning "Falha ao consultar o Easy Inventory. Voce ainda pode preencher os campos manualmente."
             return
