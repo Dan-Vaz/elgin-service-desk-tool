@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.40"
+$global:AppVersion    = "3.41"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -2635,7 +2635,7 @@ function Show-PrinterDetailsDialog {
 
     $spToners = $dlg.FindName("SpToners")
     $mapaCores = @{ "P"="Preto"; "C"="Ciano"; "M"="Magenta"; "Y"="Amarelo" }
-    $mapaHex   = @{ "P"="#9CA3AF"; "C"="#00BCFF"; "M"="#EAB308"; "Y"="#EAB308" }
+    $mapaHex   = @{ "P"="#9CA3AF"; "C"="#00BCFF"; "M"="#EC4899"; "Y"="#EAB308" }
     $tonerText = [string]$Printer.Toner
     $achou = $false
     if ($tonerText) {
