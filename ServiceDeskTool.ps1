@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.39"
+$global:AppVersion    = "3.40"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -2635,7 +2635,7 @@ function Show-PrinterDetailsDialog {
 
     $spToners = $dlg.FindName("SpToners")
     $mapaCores = @{ "P"="Preto"; "C"="Ciano"; "M"="Magenta"; "Y"="Amarelo" }
-    $mapaHex   = @{ "P"="#9CA3AF"; "C"="#00BCFF"; "M"="#EC4899"; "Y"="#EAB308" }
+    $mapaHex   = @{ "P"="#9CA3AF"; "C"="#00BCFF"; "M"="#EAB308"; "Y"="#EAB308" }
     $tonerText = [string]$Printer.Toner
     $achou = $false
     if ($tonerText) {
@@ -2953,7 +2953,7 @@ $script:XamlHead = @'
                                     <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
-                                <Border Grid.Column="0" Style="{StaticResource SidebarNavIcon}" Background="#EC4899">
+                                <Border Grid.Column="0" Style="{StaticResource SidebarNavIcon}" Background="#EAB308">
                                     <TextBlock Text="EI" Style="{StaticResource SidebarNavIconText}"/>
                                 </Border>
                                 <TextBlock Grid.Column="1" Text="Enviar Inventario" Style="{StaticResource SidebarNavLabel}"/>
@@ -4424,9 +4424,11 @@ function Get-Acentuado {
     return [regex]::Replace($Texto, '\\x([0-9A-Fa-f]{2})', { param($m) [string][char][Convert]::ToInt32($m.Groups[1].Value,16) })
 }
 
-# A sobrescrita local vem ANTES do token embutido: assim, se o token publicado
-# for rotacionado ou revogado, da pra destravar uma maquina colando o novo na
-# propria aba, sem esperar uma versao nova da ferramenta.
+# A sobrescrita local vem ANTES do token embutido. Nao ha mais interface pra
+# isso (decisao do usuario: o token ja vem embutido, nao faz sentido pedir na
+# tela) - e uma saida de emergencia manual: se o token publicado for rotacionado
+# ou revogado, ele para de funcionar pra todos ao mesmo tempo, e criar este
+# arquivo com o token novo destrava uma maquina sem esperar versao nova.
 function Get-InventarioToken {
     try {
         if (Test-Path $global:InventarioTokenFile) {
@@ -4435,20 +4437,6 @@ function Get-InventarioToken {
         }
     } catch {}
     return $global:InventarioApiTokenPadrao
-}
-
-function Save-InventarioToken {
-    param([string]$Token)
-    try {
-        $pasta = Split-Path $global:InventarioTokenFile -Parent
-        if (-not (Test-Path $pasta)) { New-Item -ItemType Directory -Path $pasta -Force | Out-Null }
-        ([string]$Token).Trim() | Out-File -LiteralPath $global:InventarioTokenFile -Encoding ASCII -Force
-        Write-Log -Message "[INVENTARIO] Token salvo no perfil do usuario."
-        return $true
-    } catch {
-        Write-Log -Message ("[INVENTARIO] Falha ao salvar o token: {0}" -f $_.Exception.Message) -Level "ERROR"
-        return $false
-    }
 }
 
 function Get-InventarioSaudacao {
@@ -5632,20 +5620,9 @@ $script:XamlPanelsD = @'
                     <ScrollViewer Grid.Row="2">
                         <StackPanel>
 
-                            <Border x:Name="CardInvToken" Margin="0,0,0,12" Style="{StaticResource Card}" Visibility="Collapsed">
-                                <StackPanel>
-                                    <TextBlock Text="TOKEN DA API" Foreground="{DynamicResource BrushWarning}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
-                                    <TextBlock Text="A consulta ao Easy Inventory falhou. Se o token da API tiver sido trocado, cole o novo abaixo para destravar esta maquina agora, sem depender de uma atualizacao da ferramenta. Ele fica salvo apenas no seu perfil do Windows." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBox x:Name="TxtInvToken" Width="380" Height="30" Padding="6,4" Background="{DynamicResource BrushInputBg}" Foreground="{DynamicResource BrushText}" BorderBrush="{DynamicResource BrushInputBorder}" Margin="0,0,10,0"/>
-                                        <Button x:Name="BtnInvSalvarToken" Content="Salvar token" Height="30" Width="130" Style="{StaticResource CardButton}" Background="{DynamicResource BrushWarning}"/>
-                                    </StackPanel>
-                                </StackPanel>
-                            </Border>
-
                             <Border Margin="0,0,0,12" Style="{StaticResource Card}">
                                 <StackPanel>
-                                    <TextBlock Text="1. TIPO DE INVENTARIO" Foreground="#EC4899" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <TextBlock Text="1. TIPO DE INVENTARIO" Foreground="#EAB308" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
                                     <WrapPanel>
                                         <Button x:Name="BtnInvTipo1" Tag="1" Content="Novos Colaboradores" Height="34" Width="180" Margin="0,0,8,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
                                         <Button x:Name="BtnInvTipo2" Tag="2" Content="Comum" Height="34" Width="120" Margin="0,0,8,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
@@ -5658,11 +5635,11 @@ $script:XamlPanelsD = @'
 
                             <Border x:Name="CardInvBusca" Margin="0,0,0,12" Style="{StaticResource Card}">
                                 <StackPanel>
-                                    <TextBlock Text="2. BUSCAR NO EASY INVENTORY" Foreground="#EC4899" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <TextBlock Text="2. BUSCAR NO EASY INVENTORY" Foreground="#EAB308" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
                                     <TextBlock Text="Na primeira busca a ferramenta baixa a base inteira, o que leva cerca de 1 minuto: a API so aceita uma consulta a cada 30 segundos. As buscas seguintes sao instantaneas." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
                                     <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                                         <TextBox x:Name="TxtInvHostname" Width="260" Height="32" Padding="6,4" Background="{DynamicResource BrushInputBg}" Foreground="{DynamicResource BrushText}" BorderBrush="{DynamicResource BrushInputBorder}" Margin="0,0,10,0"/>
-                                        <Button x:Name="BtnInvBuscar" Content="Buscar dados" Height="32" Width="150" Style="{StaticResource CardButton}" Background="#EC4899" Margin="0,0,10,0"/>
+                                        <Button x:Name="BtnInvBuscar" Content="Buscar dados" Height="32" Width="150" Style="{StaticResource CardButton}" Background="#EAB308" Margin="0,0,10,0"/>
                                         <Button x:Name="BtnInvManual" Content="Preencher manual" Height="32" Width="150" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
                                     </StackPanel>
                                     <TextBlock x:Name="TxtInvStatusBusca" Text="Digite o hostname ou a etiqueta da maquina." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap"/>
@@ -5671,7 +5648,7 @@ $script:XamlPanelsD = @'
 
                             <Border x:Name="CardInvCampos" Margin="0,0,0,12" Style="{StaticResource Card}" Visibility="Collapsed">
                                 <StackPanel>
-                                    <TextBlock Text="3. DADOS DO EQUIPAMENTO" Foreground="#EC4899" FontSize="12" FontWeight="Bold" Margin="0,0,0,4"/>
+                                    <TextBlock Text="3. DADOS DO EQUIPAMENTO" Foreground="#EAB308" FontSize="12" FontWeight="Bold" Margin="0,0,0,4"/>
                                     <TextBlock Text="Revise e edite o que precisar antes de adicionar. Campos em branco entram vazios no e-mail." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
                                     <StackPanel x:Name="SpInvCampos" Margin="0,0,0,6"/>
                                     <StackPanel x:Name="SpInvCelular" Visibility="Collapsed" Margin="0,6,0,0">
@@ -5686,7 +5663,7 @@ $script:XamlPanelsD = @'
 
                             <Border Margin="0,0,0,12" Style="{StaticResource Card}">
                                 <StackPanel>
-                                    <TextBlock x:Name="TxtInvTituloLista" Text="4. EQUIPAMENTOS NO E-MAIL (0)" Foreground="#EC4899" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <TextBlock x:Name="TxtInvTituloLista" Text="4. EQUIPAMENTOS NO E-MAIL (0)" Foreground="#EAB308" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
                                     <TextBlock x:Name="TxtInvLista" Text="Nenhum equipamento adicionado ainda." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
                                     <StackPanel Orientation="Horizontal">
                                         <Button x:Name="BtnInvRemoverUltimo" Content="Remover ultimo" Height="32" Width="150" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" Margin="0,0,8,0"/>
@@ -5697,7 +5674,7 @@ $script:XamlPanelsD = @'
 
                             <Border Margin="0,0,0,12" Style="{StaticResource Card}">
                                 <StackPanel>
-                                    <TextBlock Text="5. DESTINATARIOS" Foreground="#EC4899" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <TextBlock Text="5. DESTINATARIOS" Foreground="#EAB308" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
                                     <WrapPanel Margin="0,0,0,8">
                                         <Button x:Name="BtnInvGrupo1" Tag="1" Content="Padrao" Height="34" Width="110" Margin="0,0,8,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
                                         <Button x:Name="BtnInvGrupo2" Tag="2" Content="VLO" Height="34" Width="110" Margin="0,0,8,8" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
@@ -5711,9 +5688,9 @@ $script:XamlPanelsD = @'
 
                             <Border Margin="0,0,0,12" Style="{StaticResource Card}">
                                 <StackPanel>
-                                    <TextBlock Text="6. GERAR" Foreground="#EC4899" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <TextBlock Text="6. GERAR" Foreground="#EAB308" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
                                     <TextBlock Text="Abre um rascunho no Outlook com Para, Cc, Assunto e Corpo preenchidos. O envio continua sendo manual - a ferramenta nunca envia sozinha." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
-                                    <Button x:Name="BtnInvGerar" Content="Gerar rascunho no Outlook" Height="38" Width="260" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="#EC4899"/>
+                                    <Button x:Name="BtnInvGerar" Content="Gerar rascunho no Outlook" Height="38" Width="260" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="#EAB308"/>
                                 </StackPanel>
                             </Border>
 
@@ -5888,7 +5865,7 @@ function Show-MainWindow {
         @{ Key="Checklist";   Title="Checklist";            Desc="Formatacao e configuracao passo a passo";                     Categoria="Setup";         Mono="CK"; Cor="#4C6FFF" }
         @{ Key="Instalar";    Title="Instalar Aplicativos";  Desc="Lista padrao, busca winget/choco e Pacote Extra";             Categoria="Instalacao";    Mono="IN"; Cor="#22C55E" }
         @{ Key="Drivers";     Title="Drivers";               Desc="Escaneia e baixa drivers faltantes (Snappy Driver Installer)"; Categoria="Instalacao";    Mono="DR"; Cor="#F97316" }
-        @{ Key="Inventario";  Title="Enviar Inventario";     Desc="Coleta e envio do inventario da maquina";                     Categoria="Instalacao";    Mono="EI"; Cor="#EC4899" }
+        @{ Key="Inventario";  Title="Enviar Inventario";     Desc="Coleta e envio do inventario da maquina";                     Categoria="Instalacao";    Mono="EI"; Cor="#EAB308" }
         @{ Key="Diagnostico"; Title="Diagnostico";           Desc="Relatorio do sistema, ativacao do Windows/Office e boot";     Categoria="Diagnostico";   Mono="DG"; Cor="#2563EB" }
         @{ Key="Rede";        Title="Rede";                  Desc="DNS, IP, Winsock, Wi-Fi, conexoes e unidades mapeadas";       Categoria="Diagnostico";   Mono="RD"; Cor="#0EA5E9" }
         @{ Key="Impressao";   Title="Impressao";             Desc="Spooler, monitor SNMP e gerenciamento de impressoras";        Categoria="Equipamentos";  Mono="IP"; Cor="#7C6FFA" }
@@ -6463,7 +6440,6 @@ function Show-MainWindow {
     $spInvCelCampos = $window.FindName("SpInvCelularCampos")
     $cardInvCampos  = $window.FindName("CardInvCampos")
     $cardInvBusca   = $window.FindName("CardInvBusca")
-    $cardInvToken   = $window.FindName("CardInvToken")
     $txtInvHost     = $window.FindName("TxtInvHostname")
     $txtInvStatus   = $window.FindName("TxtInvStatusBusca")
     $txtInvObs      = $window.FindName("TxtInvObs")
@@ -6565,7 +6541,7 @@ function Show-MainWindow {
         param([int]$Id)
         $global:InventarioTipoSel = $tiposInv | Where-Object { $_.Id -eq $Id } | Select-Object -First 1
         foreach ($b in $btnsInvTipo) {
-            if ([int]$b.Tag -eq $Id) { $b.Background = Get-Brush "#EC4899"; $b.Foreground = Get-Brush "#FFFFFF" }
+            if ([int]$b.Tag -eq $Id) { $b.Background = Get-Brush "#EAB308"; $b.Foreground = Get-Brush "#1F2937" }
             else { $b.Background = Get-ThemeBrush "BrushBorder"; $b.Foreground = Get-ThemeBrush "BrushText" }
         }
         $global:InventarioAchouNaBase = $false
@@ -6587,19 +6563,12 @@ function Show-MainWindow {
             $id = [int]$this.Tag
             $global:InventarioGrupoSel = $gruposInv | Where-Object { $_.Id -eq $id } | Select-Object -First 1
             foreach ($x in $btnsInvGrupo) {
-                if ([int]$x.Tag -eq $id) { $x.Background = Get-Brush "#EC4899"; $x.Foreground = Get-Brush "#FFFFFF" }
+                if ([int]$x.Tag -eq $id) { $x.Background = Get-Brush "#EAB308"; $x.Foreground = Get-Brush "#1F2937" }
                 else { $x.Background = Get-ThemeBrush "BrushBorder"; $x.Foreground = Get-ThemeBrush "BrushText" }
             }
             $txtInvDest.Text = ("Para: {0}`nCc: {1}" -f ($global:InventarioGrupoSel.Para -join '; '), ($global:InventarioGrupoSel.Cc -join '; '))
         }.GetNewClosure())
     }
-
-    $window.FindName("BtnInvSalvarToken").Add_Click({
-        $t = $window.FindName("TxtInvToken").Text
-        if ([string]::IsNullOrWhiteSpace($t)) { Show-Warning "Cole o token antes de salvar."; return }
-        if (Save-InventarioToken -Token $t) { $cardInvToken.Visibility = "Collapsed"; Show-Info "Token salvo. Ele fica apenas neste perfil do Windows." }
-        else { Show-Warning "Nao foi possivel salvar o token. Verifique os Logs." }
-    }.GetNewClosure())
 
     $window.FindName("BtnInvBuscar").Add_Click({
         if ($global:InventarioTipoSel -eq $null) { Show-Warning "Escolha primeiro o tipo de inventario."; return }
@@ -6607,9 +6576,6 @@ function Show-MainWindow {
         if ([string]::IsNullOrWhiteSpace($alvo)) { Show-Warning "Digite o hostname ou a etiqueta."; return }
         $precisaSw = [bool]$global:InventarioTipoSel.PrecisaOcs
         if (-not (Confirm-InventarioCache -PrecisaSoftware:$precisaSw)) {
-            # Token trocado/revogado e a causa mais provavel, entao o campo de
-            # sobrescrita aparece aqui - e o unico momento em que ele resolve.
-            $cardInvToken.Visibility = "Visible"
             $txtInvStatus.Text = "Nao foi possivel baixar os dados do Easy Inventory. Verifique os Logs ou preencha manualmente."
             Show-Warning "Falha ao consultar o Easy Inventory. Voce ainda pode preencher os campos manualmente."
             return
