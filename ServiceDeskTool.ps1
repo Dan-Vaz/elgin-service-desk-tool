@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.44"
+$global:AppVersion    = "3.45"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -56,7 +56,7 @@ $global:CanonicalSourceUrl = "https://gist.githubusercontent.com/Dan-Vaz/91cf365
 # versao MAIS VELHA do que a que ele acabara de abrir.
 $global:FallbackSourceUrl = $global:CanonicalSourceUrl
 $global:SchemaVersion = 8
-$global:ExtraSchemaVersion = 10
+$global:ExtraSchemaVersion = 11
 # Falhas de escrita nos JSONs de configuracao, coletadas durante o startup e
 # mostradas de uma vez so antes da janela abrir (Show-ConfigPermissionWarning).
 # Existe porque essa falha era 100% invisivel - ver Test-SchemaWriteLanded.
@@ -88,12 +88,11 @@ $global:FormIcon      = $null
 $global:AnyDeskDownloadUrl        = "https://download.anydesk.com/AnyDesk.exe"
 $global:AnyDeskUnattendedPassword = '$uP0rt&__22'
 
-# Desinstalador oficial do Bitdefender GravityZone (BEST Uninstall Tool) -
-# usado pela ferramenta separada em Ferramentas ("Remover Bitdefender Refrio").
-# A senha vai em base64 no parametro /passbase64: I2hQSyZ6Y0x1TGIw decodifica
-# para a senha real de desinstalacao (esquema exigido pelo proprio BEST tool).
-$global:BitdefenderUninstallUrl  = "https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/BEST_uninstallTool.exe"
-$global:BitdefenderUninstallArgs = @("/bdparams","/passbase64=I2hQSyZ6Y0x1TGIw","/noWait")
+# O desinstalador oficial do Bitdefender GravityZone (BEST Uninstall Tool) que
+# ia aqui como globais foi movido pra dentro do proprio item "Refrio - Remover
+# Bitdefender" do Pacote Extra (Get-DefaultExtraAppList, Url/SilentArgs) -
+# mesmo padrao data-driven dos outros itens da lista (CrowdStrike, TOTVS etc).
+# A senha em base64 no /passbase64 continua sendo a mesma (I2hQSyZ6Y0x1TGIw).
 
 # Snappy Driver Installer Origin (SDIO) - ferramenta portable de scan e
 # download de drivers usada pela aba "Drivers". O zip oficial e publicado pelo
@@ -1127,6 +1126,13 @@ function Get-DefaultExtraAppList {
         # pode precisar de configuracao no meio da instalacao, entao deixar o
         # tecnico ver a tela e mais seguro do que arriscar instalar torto.
         [PSCustomObject]@{Name="TOTVS (Somente Laurenti)"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/TOTVS-WebAgent-1.1.0-x64.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true; UninstallMatch="Web Agent"}
+        # "Refrio - Remover Bitdefender": item ESPECIAL, tratado por
+        # Invoke-BitdefenderUninstallExtra (nao por Install-DirectApp) no loop
+        # de instalacao do Pacote Extra - antes de baixar/rodar este exe, ele
+        # confirma (ou instala via API) o sensor CrowdStrike Falcon, pra
+        # maquina nunca ficar sem EDR/AV. Url/SilentArgs abaixo SAO usados pela
+        # funcao (data-driven, mesmo padrao dos demais itens desta lista).
+        [PSCustomObject]@{Name="Refrio - Remover Bitdefender"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/BEST_uninstallTool.exe"; SilentArgs=@("/bdparams","/passbase64=I2hQSyZ6Y0x1TGIw","/noWait"); Ext=".exe"; IsMSI=$false; TimeoutSeconds=600; Enabled=$true; UninstallMatch="Bitdefender"}
     )
 }
 
@@ -4878,14 +4884,22 @@ function Install-CrowdStrikeAndRemediateBitdefender {
 }
 
 # ==============================================================================
-# "REFRIO - REMOVER BITDEFENDER" (aba Ferramentas)
-# Removedor avulso, diferente do fluxo do Pacote Extra acima: aqui o tecnico
-# aciona manualmente numa maquina especifica, e o proprio GATE de EDR instala
-# o sensor Falcon **via API** (auth OAuth2 -> CCID -> versao pela Sensor
-# Update Policy -> localizar instalador -> baixar com verificacao SHA256 ->
-# instalar) quando o CSFalconService nao esta presente, em vez de depender do
-# exe pre-empacotado usado pelo Pacote Extra. Portado de um script de Intune
-# Proactive Remediation (Elgin-Falcon-Sensor-RemoveBit-WorkStation.ps1).
+# "Refrio - Remover Bitdefender" (item do PACOTE EXTRA, selecionavel em lote
+# junto com os demais - CrowdStrike, DELL SupportAssist, TOTVS etc.)
+# Diferente do gate de EDR do proprio Pacote Extra (Install-CrowdStrike...
+# acima, que baixa um exe pre-empacotado com CID fixo), este instala o sensor
+# Falcon **via API** (auth OAuth2 -> CCID -> versao pela Sensor Update Policy
+# -> localizar instalador -> baixar com verificacao SHA256 -> instalar) quando
+# o CSFalconService nao esta presente. So depois do sensor confirmado a
+# Bitdefender e removida. Portado de um script de Intune Proactive Remediation
+# (Elgin-Falcon-Sensor-RemoveBit-WorkStation.ps1).
+#
+# Invoke-BitdefenderUninstallExtra segue a MESMA convencao de
+# Install-CrowdStrikeAndRemediateBitdefender (chamada dentro do loop de
+# instalacao em lote do Pacote Extra): sem Confirm-Action e sem
+# Show-Info/Warning/ErrorBox (popup por item travaria um lote com varios
+# selecionados) - so Write-Log e um bool de retorno, que vai pro relatorio
+# final via Export-InstallReport.
 # ==============================================================================
 
 # Espera um SERVICO aparecer sem travar a janela (mesmo padrao "nao trava" do
@@ -5011,55 +5025,52 @@ try {
     return [PSCustomObject]@{ ok=$false; ccid=""; version=""; erro=(("exit {0}: {1}" -f $r.ExitCode, [string]$r.Output).Trim()) }
 }
 
-function Invoke-BitdefenderUninstall {
-    if (-not $global:IsAdmin) { Show-Warning "Requer Administrador."; return }
-    if (-not (Confirm-Action "Isso confirma (ou instala via API) o sensor CrowdStrike Falcon e, so depois, baixa e executa o desinstalador oficial da Bitdefender nesta maquina - a janela do desinstalador fica oculta durante a remocao. Continuar?" "Refrio - Remover Bitdefender")) { return }
+function Invoke-BitdefenderUninstallExtra {
+    param([Parameter(Mandatory=$true)]$App)
 
     # 1. GATE DE SEGURANCA: a Bitdefender so e removida com o Falcon confirmado
     # presente - se a instalacao via API falhar ou o servico nao aparecer, a
-    # funcao encerra aqui e a Bitdefender NAO e tocada.
+    # funcao encerra aqui (retorna $false) e a Bitdefender NAO e tocada.
     if (-not (Get-Service -Name "CSFalconService" -ErrorAction SilentlyContinue)) {
         Write-Log -Message "[REFRIO] CSFalconService ausente - instalando o sensor Falcon via API antes de prosseguir." -Level "WARN"
         $inst = Install-FalconSensorViaApi
         if (-not $inst.ok) {
-            Write-Log -Message ("[REFRIO] Falha ao instalar o sensor Falcon: {0}" -f $inst.erro) -Level "ERROR"
-            Show-ErrorBox ("Nao foi possivel instalar o sensor CrowdStrike Falcon via API.`n`n{0}`n`nA Bitdefender NAO foi removida - a maquina ficaria sem EDR/AV ativo." -f $inst.erro)
-            return
+            Write-Log -Message ("[REFRIO] Falha ao instalar o sensor Falcon: {0}. Bitdefender NAO sera removida." -f $inst.erro) -Level "ERROR"
+            return $false
         }
         Write-Log -Message ("[REFRIO] Sensor Falcon instalado via API (CCID {0}, versao {1}). Aguardando o servico registrar..." -f $inst.ccid,$inst.version) -Level "SUCCESS"
         if (-not (Wait-ServiceResponsive -ServiceName "CSFalconService" -TimeoutSeconds $global:FalconInstallWaitSeconds -BusyText "Aguardando o servico CrowdStrike Falcon iniciar...")) {
             Write-Log -Message ("[REFRIO] CSFalconService nao apareceu em {0}s apos a instalacao via API - Bitdefender NAO sera removida." -f $global:FalconInstallWaitSeconds) -Level "ERROR"
-            Show-ErrorBox ("O sensor Falcon foi instalado mas o servico CSFalconService nao ficou disponivel em {0}s.`n`nA Bitdefender NAO foi removida." -f $global:FalconInstallWaitSeconds)
-            return
+            return $false
         }
     }
     Write-Log -Message "[REFRIO] Sensor CrowdStrike Falcon confirmado. Prosseguindo com a remocao da Bitdefender." -Level "SUCCESS"
 
-    # 2. Bitdefender ja ausente? Nada a fazer.
+    # 2. Bitdefender ja ausente? Nada a fazer - sucesso (nao ha o que remediar).
     if (-not (Test-BitdefenderStillInstalled)) {
         Write-Log -Message "[REFRIO] Bitdefender ja nao estava instalada. Nada a remediar." -Level "INFO"
-        Show-Info "A Bitdefender ja nao esta instalada nesta maquina."
-        return
+        return $true
     }
 
     # 3. Baixa e roda o desinstalador oficial com a JANELA OCULTA (-HideWindow):
     # impede que um usuario logado clique em Cancelar no meio da remocao.
+    # Url/SilentArgs vem do proprio item do Pacote Extra (nao de globais) -
+    # mesmo padrao data-driven de Install-DirectApp.
     $tempFile = Join-Path $env:TEMP ("elgin_refrio_bd_{0}.exe" -f [guid]::NewGuid().ToString("N").Substring(0,8))
     try {
         Set-Status "Baixando o desinstalador oficial da Bitdefender..."
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11
         $prevProg = $ProgressPreference; $ProgressPreference = "SilentlyContinue"
-        Invoke-WebRequest -Uri $global:BitdefenderUninstallUrl -OutFile $tempFile -UseBasicParsing -ErrorAction Stop
+        Invoke-WebRequest -Uri $App.Url -OutFile $tempFile -UseBasicParsing -ErrorAction Stop
         $ProgressPreference = $prevProg
 
-        $proc = Start-Process -FilePath $tempFile -ArgumentList $global:BitdefenderUninstallArgs -PassThru -ErrorAction Stop
+        $proc = Start-Process -FilePath $tempFile -ArgumentList $App.SilentArgs -PassThru -ErrorAction Stop
         $timedOut = Wait-ProcessResponsive -Process $proc -TimeoutSeconds 600 -BusyText "Removendo a Bitdefender (janela oculta para nao ser cancelada)..." -HideWindow
         if ($timedOut) { Write-Log -Message "[REFRIO] Timeout ao remover a Bitdefender." -Level "ERROR" }
         else { Write-Log -Message ("[REFRIO] Uninstaller da Bitdefender retornou ExitCode {0}." -f $proc.ExitCode) -Level "INFO" }
     } catch {
         Write-Log -Message ("[REFRIO] Falha ao baixar/executar o desinstalador: {0}" -f $_.Exception.Message) -Level "ERROR"
-        Show-ErrorBox ("Falha ao remover a Bitdefender.`n`n{0}" -f $_.Exception.Message)
-        return
+        return $false
     } finally {
         if (Test-Path $tempFile) { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue }
     }
@@ -5068,10 +5079,10 @@ function Invoke-BitdefenderUninstall {
     # o instalador retornou exit code 0.
     if (Test-BitdefenderStillInstalled) {
         Write-Log -Message "[REFRIO] Uninstaller executado, porem a Bitdefender ainda consta no registro de desinstalacao." -Level "ERROR"
-        Show-Warning "O desinstalador rodou, mas a Bitdefender ainda aparece instalada no registro. Verifique manualmente."
+        return $false
     } else {
         Write-Log -Message "[REFRIO] Bitdefender removida com sucesso (sensor Falcon confirmado presente durante todo o processo)." -Level "SUCCESS"
-        Show-Info "Bitdefender removida com sucesso. O sensor CrowdStrike Falcon foi confirmado presente durante todo o processo."
+        return $true
     }
 }
 
@@ -5926,20 +5937,11 @@ $script:XamlPanelsD = @'
                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
                             <!-- DESINSTALADOR SEGURO -->
-                            <Border Grid.Row="0" Grid.Column="0" Margin="0,0,5,12" Style="{StaticResource Card}">
+                            <Border Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,0,0,12" Style="{StaticResource Card}">
                                 <StackPanel>
                                     <TextBlock Text="DESINSTALADOR SEGURO" Foreground="{DynamicResource BrushDanger}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
                                     <TextBlock Text="Desinstala o programa e depois procura residuos (pastas e chaves de registro) deixados para tras, igual o Revo Uninstaller - voce revisa e escolhe o que apagar." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
                                     <Button x:Name="BtnUninstaller" Content="Desinstalador Seguro" Height="38" Width="240" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushDanger}"/>
-                                </StackPanel>
-                            </Border>
-
-                            <!-- REFRIO - REMOVER BITDEFENDER -->
-                            <Border Grid.Row="0" Grid.Column="1" Margin="5,0,0,12" Style="{StaticResource Card}">
-                                <StackPanel>
-                                    <TextBlock Text="REFRIO - REMOVER BITDEFENDER" Foreground="{DynamicResource BrushWarning}" FontSize="12" FontWeight="Bold" Margin="0,0,0,10"/>
-                                    <TextBlock Text="Confirma (ou instala via API) o sensor CrowdStrike Falcon antes de remover a Bitdefender - a maquina nunca fica sem EDR/AV. Baixa o desinstalador oficial (BEST Uninstall Tool) e roda com a janela oculta, para nao ser cancelado no meio." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
-                                    <Button x:Name="BtnDesinstalarBitdefender" Content="Refrio - Remover Bitdefender" Height="38" Width="240" HorizontalAlignment="Left" Style="{StaticResource CardButton}" Background="{DynamicResource BrushWarning}"/>
                                 </StackPanel>
                             </Border>
 
@@ -6426,6 +6428,8 @@ function Show-MainWindow {
                 if ($app.Name -eq "Easy Inventory (EasyELGIN)") { Remove-LegacyEasyElginRegistration }
                 if ($app.Name -eq "CrowdStrike (Anti-Virus)") {
                     $results[$app.Name] = Install-CrowdStrikeAndRemediateBitdefender -App $app
+                } elseif ($app.Name -eq "Refrio - Remover Bitdefender") {
+                    $results[$app.Name] = Invoke-BitdefenderUninstallExtra -App $app
                 } else {
                     $results[$app.Name] = Install-DirectApp -App $app
                 }
@@ -6646,7 +6650,6 @@ function Show-MainWindow {
         Show-UninstallerDialog
     }.GetNewClosure())
     $window.FindName("BtnPegarSenhaLaps").Add_Click({ Invoke-LapsPasswordLookup }.GetNewClosure())
-    $window.FindName("BtnDesinstalarBitdefender").Add_Click({ Invoke-BitdefenderUninstall }.GetNewClosure())
 
     # ---- Drivers ----
     $window.FindName("BtnScanDrivers").Add_Click({ Invoke-DriverScanTool }.GetNewClosure())
