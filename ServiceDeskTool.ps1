@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.45"
+$global:AppVersion    = "3.46"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -56,7 +56,7 @@ $global:CanonicalSourceUrl = "https://gist.githubusercontent.com/Dan-Vaz/91cf365
 # versao MAIS VELHA do que a que ele acabara de abrir.
 $global:FallbackSourceUrl = $global:CanonicalSourceUrl
 $global:SchemaVersion = 8
-$global:ExtraSchemaVersion = 11
+$global:ExtraSchemaVersion = 12
 # Falhas de escrita nos JSONs de configuracao, coletadas durante o startup e
 # mostradas de uma vez so antes da janela abrir (Show-ConfigPermissionWarning).
 # Existe porque essa falha era 100% invisivel - ver Test-SchemaWriteLanded.
@@ -136,9 +136,10 @@ $global:FalconBaseUrl               = "https://api.us-2.crowdstrike.com"
 $global:FalconTargetHostGroupId     = "84d2687962b64edcacd8e47035c54de5"
 $global:FalconSourceHostGroupId     = ""
 
-# Usados so por "Refrio - Remover Bitdefender" (aba Ferramentas), que instala
-# o sensor Falcon via API (nao via download de exe pre-empacotado, como o
-# Pacote Extra faz) quando o CSFalconService nao esta presente. Reaproveita
+# Usados so por "Refrio - Desinstalar bitdefender e Instalar CrowdStrike"
+# (item do Pacote Extra), que instala o sensor Falcon via API (nao via
+# download de exe pre-empacotado, como o gate do "CrowdStrike (Anti-Virus)"
+# faz) quando o CSFalconService nao esta presente. Reaproveita
 # $global:FalconClientId/Secret/BaseUrl de cima - o mesmo client precisa dos
 # escopos "Sensor Download: READ" e "Sensor update policies: READ" no console
 # Falcon (Support and resources > API clients and keys).
@@ -1126,13 +1127,14 @@ function Get-DefaultExtraAppList {
         # pode precisar de configuracao no meio da instalacao, entao deixar o
         # tecnico ver a tela e mais seguro do que arriscar instalar torto.
         [PSCustomObject]@{Name="TOTVS (Somente Laurenti)"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/TOTVS-WebAgent-1.1.0-x64.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true; UninstallMatch="Web Agent"}
-        # "Refrio - Remover Bitdefender": item ESPECIAL, tratado por
-        # Invoke-BitdefenderUninstallExtra (nao por Install-DirectApp) no loop
-        # de instalacao do Pacote Extra - antes de baixar/rodar este exe, ele
-        # confirma (ou instala via API) o sensor CrowdStrike Falcon, pra
-        # maquina nunca ficar sem EDR/AV. Url/SilentArgs abaixo SAO usados pela
-        # funcao (data-driven, mesmo padrao dos demais itens desta lista).
-        [PSCustomObject]@{Name="Refrio - Remover Bitdefender"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/BEST_uninstallTool.exe"; SilentArgs=@("/bdparams","/passbase64=I2hQSyZ6Y0x1TGIw","/noWait"); Ext=".exe"; IsMSI=$false; TimeoutSeconds=600; Enabled=$true; UninstallMatch="Bitdefender"}
+        # "Refrio - Desinstalar bitdefender e Instalar CrowdStrike": item
+        # ESPECIAL, tratado por Invoke-BitdefenderUninstallExtra (nao por
+        # Install-DirectApp) no loop de instalacao do Pacote Extra - antes de
+        # baixar/rodar este exe, ele confirma (ou instala via API) o sensor
+        # CrowdStrike Falcon, pra maquina nunca ficar sem EDR/AV. Url/SilentArgs
+        # abaixo SAO usados pela funcao (data-driven, mesmo padrao dos demais
+        # itens desta lista).
+        [PSCustomObject]@{Name="Refrio - Desinstalar bitdefender e Instalar CrowdStrike"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/BEST_uninstallTool.exe"; SilentArgs=@("/bdparams","/passbase64=I2hQSyZ6Y0x1TGIw","/noWait"); Ext=".exe"; IsMSI=$false; TimeoutSeconds=600; Enabled=$true; UninstallMatch="Bitdefender"}
     )
 }
 
@@ -4701,9 +4703,10 @@ function New-InventarioRascunho {
     }
 }
 
-# A funcao do botao "Refrio - Remover Bitdefender" (Invoke-BitdefenderUninstall)
-# fica logo apos Install-CrowdStrikeAndRemediateBitdefender, mais abaixo neste
-# arquivo - ela reaproveita Get-FalconAccessToken, Get-FalconHttpErrorDetail e
+# A funcao do item "Refrio - Desinstalar bitdefender e Instalar CrowdStrike"
+# (Invoke-BitdefenderUninstallExtra) fica logo apos
+# Install-CrowdStrikeAndRemediateBitdefender, mais abaixo neste arquivo - ela
+# reaproveita Get-FalconAccessToken, Get-FalconHttpErrorDetail e
 # Test-BitdefenderStillInstalled definidas ali.
 
 # ==============================================================================
@@ -4884,8 +4887,9 @@ function Install-CrowdStrikeAndRemediateBitdefender {
 }
 
 # ==============================================================================
-# "Refrio - Remover Bitdefender" (item do PACOTE EXTRA, selecionavel em lote
-# junto com os demais - CrowdStrike, DELL SupportAssist, TOTVS etc.)
+# "Refrio - Desinstalar bitdefender e Instalar CrowdStrike" (item do PACOTE
+# EXTRA, selecionavel em lote junto com os demais - CrowdStrike, DELL
+# SupportAssist, TOTVS etc.)
 # Diferente do gate de EDR do proprio Pacote Extra (Install-CrowdStrike...
 # acima, que baixa um exe pre-empacotado com CID fixo), este instala o sensor
 # Falcon **via API** (auth OAuth2 -> CCID -> versao pela Sensor Update Policy
@@ -6428,7 +6432,7 @@ function Show-MainWindow {
                 if ($app.Name -eq "Easy Inventory (EasyELGIN)") { Remove-LegacyEasyElginRegistration }
                 if ($app.Name -eq "CrowdStrike (Anti-Virus)") {
                     $results[$app.Name] = Install-CrowdStrikeAndRemediateBitdefender -App $app
-                } elseif ($app.Name -eq "Refrio - Remover Bitdefender") {
+                } elseif ($app.Name -eq "Refrio - Desinstalar bitdefender e Instalar CrowdStrike") {
                     $results[$app.Name] = Invoke-BitdefenderUninstallExtra -App $app
                 } else {
                     $results[$app.Name] = Install-DirectApp -App $app
