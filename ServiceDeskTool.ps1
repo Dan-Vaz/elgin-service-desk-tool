@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.48"
+$global:AppVersion    = "3.49"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -56,7 +56,7 @@ $global:CanonicalSourceUrl = "https://gist.githubusercontent.com/Dan-Vaz/91cf365
 # versao MAIS VELHA do que a que ele acabara de abrir.
 $global:FallbackSourceUrl = $global:CanonicalSourceUrl
 $global:SchemaVersion = 8
-$global:ExtraSchemaVersion = 13
+$global:ExtraSchemaVersion = 14
 # Falhas de escrita nos JSONs de configuracao, coletadas durante o startup e
 # mostradas de uma vez so antes da janela abrir (Show-ConfigPermissionWarning).
 # Existe porque essa falha era 100% invisivel - ver Test-SchemaWriteLanded.
@@ -1146,6 +1146,13 @@ function Get-DefaultExtraAppList {
         # funcionou); trocado por este caminho, ja validado em producao pelo
         # item "CrowdStrike (Anti-Virus)".
         [PSCustomObject]@{Name="Refrio - Desinstalar bitdefender e Instalar CrowdStrike"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/FalconSensor_Windows.exe"; SilentArgs=@("/install","/quiet","/norestart","CID=8777EA0847824F13B27F1DFF7C0A27C4-27","ProvWaitTime=1200000"); Ext=".exe"; IsMSI=$false; TimeoutSeconds=1800; Enabled=$true; UninstallMatch="CrowdStrike"}
+        # Atera Agent (RMM) 2.5.31.0, assinado pela Atera Networks Ltd
+        # (Authenticode valido). O MSI ja vem com CUSTOMERID/FOLDERID/ACCOUNTID
+        # do tenant da Refrio embutidos (gerado direto do console deles) -
+        # instalacao silenciosa padrao, sem propriedade extra na linha de
+        # comando. IsMSI=true roda via msiexec /i ... /qn /norestart (mesmo
+        # padrao do Chrome/7-Zip).
+        [PSCustomObject]@{Name="Refrio - ATERA RMM"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/Refrio-AteraAgent.msi"; SilentArgs=@("/qn","/norestart"); Ext=".msi"; IsMSI=$true; TimeoutSeconds=900; Enabled=$true; UninstallMatch="AteraAgent"}
     )
 }
 
