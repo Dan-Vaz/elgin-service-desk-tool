@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.46"
+$global:AppVersion    = "3.47"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -1051,18 +1051,31 @@ function Test-SchemaWriteLanded {
     return $false
 }
 
-# Avisa de uma vez so, ANTES da janela principal abrir, que a configuracao
-# nao pode ser atualizada. E MessageBox e nao Set-Status/log de proposito: a
-# UI ainda nao existe neste ponto do startup, e o log e justamente o que nao
-# esta gravando quando isso acontece.
+# Avisa de uma vez so, ANTES da janela principal abrir, que a configuracao nao
+# pode ser atualizada. Chega a este ponto SEMPRE sem privilegio administrativo
+# (se a elevacao anterior tivesse dado certo, a instancia original ja teria
+# saido no "exit 0" logo apos Request-AdminElevation - so quem continua ate
+# aqui e quem recusou/cancelou a elevacao, ou abriu direto sem UAC).
+#
+# ACIONAVEL, nao so informativo: a primeira versao disto (v3.35) so avisava e
+# pedia pro tecnico fechar e reabrir como Admin manualmente - na pratica isso
+# nao bastou (o item continuava "sumido" pro tecnico, que nao associava a
+# causa ao aviso). Agora oferece reabrir na hora, um clique, reaproveitando o
+# MESMO Request-AdminElevation do gate de elevacao normal - sem duplicar
+# logica de UAC.
 function Show-ConfigPermissionWarning {
     if ($global:ConfigWriteFailures.Count -eq 0) { return }
     $itens = ($global:ConfigWriteFailures | Select-Object -Unique) -join "`n  - "
     $msg  = "Nao foi possivel atualizar a configuracao desta maquina:`n`n  - " + $itens
-    $msg += "`n`nO arquivo pertence a Administradores e a ferramenta esta rodando SEM permissao de escrita nele."
-    $msg += "`n`nA ferramenta abre normalmente, mas a lista de aplicativos pode estar DESATUALIZADA - itens novos podem nao aparecer."
-    $msg += "`n`nPara corrigir: feche e reabra a ferramenta como Administrador."
-    Show-Warning $msg "Configuracao desatualizada"
+    $msg += "`n`nO arquivo pertence a Administradores e a ferramenta esta rodando SEM permissao de escrita nele. A lista de aplicativos pode estar DESATUALIZADA - itens novos ou renomeados podem nao aparecer."
+    $msg += "`n`nReabrir agora como Administrador para corrigir?"
+    if (Confirm-Action $msg "Configuracao desatualizada") {
+        $elevado = Request-AdminElevation -Url $SourceUrl -SilentMode:$Silent
+        if ($elevado) { exit 0 }
+        # Recusou o UAC ou a elevacao falhou: Request-AdminElevation ja loga o
+        # motivo (inclusive o caso de cancelamento, que nao e erro) - aqui so
+        # segue com a janela mesmo assim, config desatualizada, sem insistir.
+    }
 }
 
 function Update-LegacyDefaultListIfNeeded {
