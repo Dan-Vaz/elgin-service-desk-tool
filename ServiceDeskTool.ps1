@@ -38,7 +38,7 @@ try {
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.47"
+$global:AppVersion    = "3.48"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -56,7 +56,7 @@ $global:CanonicalSourceUrl = "https://gist.githubusercontent.com/Dan-Vaz/91cf365
 # versao MAIS VELHA do que a que ele acabara de abrir.
 $global:FallbackSourceUrl = $global:CanonicalSourceUrl
 $global:SchemaVersion = 8
-$global:ExtraSchemaVersion = 12
+$global:ExtraSchemaVersion = 13
 # Falhas de escrita nos JSONs de configuracao, coletadas durante o startup e
 # mostradas de uma vez so antes da janela abrir (Show-ConfigPermissionWarning).
 # Existe porque essa falha era 100% invisivel - ver Test-SchemaWriteLanded.
@@ -130,22 +130,16 @@ $global:TeamsBootstrapperUrl = "https://go.microsoft.com/fwlink/?linkid=2243204"
 # console do Falcon se algum dia for necessario reduzir esse risco.
 $global:BdRemediationUninstallerUrl = "https://download.bitdefender.com/SMB/Hydra/release/bst_win/uninstallTool/BEST_uninstallTool.exe"
 $global:BdRemediationPassword       = "RnI2OFMmcjhURiZQUWpieQ=="
+# Senha separada usada so pelo item "Refrio - Desinstalar bitdefender e
+# Instalar CrowdStrike" do Pacote Extra - fluxo identico ao item "CrowdStrike
+# (Anti-Virus)" (mesma funcao, Install-CrowdStrikeAndRemediateBitdefender),
+# so muda a senha de desinstalacao da Bitdefender via -BdPassword.
+$global:RefrioBdPassword            = "I2hQSyZ6Y0x1TGIw"
 $global:FalconClientId              = "2fccc57429f743229b1d6ac52a737024"
 $global:FalconClientSecret          = "vE3jIF28VaOxD9bplq0Pen6NCmh7W1BJkQMozd45"
 $global:FalconBaseUrl               = "https://api.us-2.crowdstrike.com"
 $global:FalconTargetHostGroupId     = "84d2687962b64edcacd8e47035c54de5"
 $global:FalconSourceHostGroupId     = ""
-
-# Usados so por "Refrio - Desinstalar bitdefender e Instalar CrowdStrike"
-# (item do Pacote Extra), que instala o sensor Falcon via API (nao via
-# download de exe pre-empacotado, como o gate do "CrowdStrike (Anti-Virus)"
-# faz) quando o CSFalconService nao esta presente. Reaproveita
-# $global:FalconClientId/Secret/BaseUrl de cima - o mesmo client precisa dos
-# escopos "Sensor Download: READ" e "Sensor update policies: READ" no console
-# Falcon (Support and resources > API clients and keys).
-$global:FalconSensorUpdatePolicyName = "platform_default"
-$global:FalconInstallParams          = "/install /quiet /norestart"
-$global:FalconInstallWaitSeconds     = 180
 
 $global:IsAdmin       = $false
 $global:HasWinget     = $false
@@ -1141,13 +1135,17 @@ function Get-DefaultExtraAppList {
         # tecnico ver a tela e mais seguro do que arriscar instalar torto.
         [PSCustomObject]@{Name="TOTVS (Somente Laurenti)"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/TOTVS-WebAgent-1.1.0-x64.exe"; SilentArgs=@(); Ext=".exe"; IsMSI=$false; TimeoutSeconds=900; Enabled=$true; UninstallMatch="Web Agent"}
         # "Refrio - Desinstalar bitdefender e Instalar CrowdStrike": item
-        # ESPECIAL, tratado por Invoke-BitdefenderUninstallExtra (nao por
-        # Install-DirectApp) no loop de instalacao do Pacote Extra - antes de
-        # baixar/rodar este exe, ele confirma (ou instala via API) o sensor
-        # CrowdStrike Falcon, pra maquina nunca ficar sem EDR/AV. Url/SilentArgs
-        # abaixo SAO usados pela funcao (data-driven, mesmo padrao dos demais
-        # itens desta lista).
-        [PSCustomObject]@{Name="Refrio - Desinstalar bitdefender e Instalar CrowdStrike"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/BEST_uninstallTool.exe"; SilentArgs=@("/bdparams","/passbase64=I2hQSyZ6Y0x1TGIw","/noWait"); Ext=".exe"; IsMSI=$false; TimeoutSeconds=600; Enabled=$true; UninstallMatch="Bitdefender"}
+        # ESPECIAL, tratado por Install-CrowdStrikeAndRemediateBitdefender (a
+        # MESMA funcao do item "CrowdStrike (Anti-Virus)" acima, so passando
+        # -BdPassword diferente) no loop de instalacao do Pacote Extra, nao
+        # por Install-DirectApp direto. Url/SilentArgs sao IDENTICOS ao item
+        # "CrowdStrike (Anti-Virus)" (mesmo sensor, mesmo CID) - a unica
+        # diferenca entre os dois itens e a senha de desinstalacao da
+        # Bitdefender. Versao anterior deste item tentava instalar o sensor
+        # via API do Falcon (credenciais invalidas na pratica - nao
+        # funcionou); trocado por este caminho, ja validado em producao pelo
+        # item "CrowdStrike (Anti-Virus)".
+        [PSCustomObject]@{Name="Refrio - Desinstalar bitdefender e Instalar CrowdStrike"; Url="https://github.com/Dan-Vaz/elgin-service-desk-tool/releases/download/v1.0.0/FalconSensor_Windows.exe"; SilentArgs=@("/install","/quiet","/norestart","CID=8777EA0847824F13B27F1DFF7C0A27C4-27","ProvWaitTime=1200000"); Ext=".exe"; IsMSI=$false; TimeoutSeconds=1800; Enabled=$true; UninstallMatch="CrowdStrike"}
     )
 }
 
@@ -4716,12 +4714,6 @@ function New-InventarioRascunho {
     }
 }
 
-# A funcao do item "Refrio - Desinstalar bitdefender e Instalar CrowdStrike"
-# (Invoke-BitdefenderUninstallExtra) fica logo apos
-# Install-CrowdStrikeAndRemediateBitdefender, mais abaixo neste arquivo - ela
-# reaproveita Get-FalconAccessToken, Get-FalconHttpErrorDetail e
-# Test-BitdefenderStillInstalled definidas ali.
-
 # ==============================================================================
 # MIGRACAO CROWDSTRIKE + REMEDIACAO BITDEFENDER (Pacote Extra -> "CrowdStrike
 # (Anti-Virus)"). Portado de um script de Intune Proactive Remediation
@@ -4833,7 +4825,14 @@ function Move-FalconHostGroup {
 }
 
 function Install-CrowdStrikeAndRemediateBitdefender {
-    param([Parameter(Mandatory=$true)]$App)
+    # -BdPassword (opcional, default = $global:BdRemediationPassword): permite
+    # reaproveitar todo o resto deste fluxo (instala o sensor, GATE de EDR,
+    # remove a Bitdefender, move Host Group) com uma senha de desinstalacao
+    # DIFERENTE - usado pelo item "Refrio" do Pacote Extra, que precisa ser
+    # identico a este em tudo, exceto a senha. Mudanca aditiva: quem nao
+    # passar o parametro (o item "CrowdStrike (Anti-Virus)" original) continua
+    # com o comportamento exato de antes.
+    param([Parameter(Mandatory=$true)]$App,[string]$BdPassword=$global:BdRemediationPassword)
 
     if (-not (Install-DirectApp -App $App)) {
         Write-Log -Message "[CROWDSTRIKE] Falha ao instalar o sensor CrowdStrike - remediacao da Bitdefender NAO sera executada." -Level "ERROR"
@@ -4863,7 +4862,7 @@ function Install-CrowdStrikeAndRemediateBitdefender {
             Invoke-WebRequest -Uri $global:BdRemediationUninstallerUrl -OutFile $tempFile -UseBasicParsing -ErrorAction Stop
             $ProgressPreference = $prevProg
 
-            $bdArgs = @("/bdparams","/passbase64=`"$($global:BdRemediationPassword)`"","/noWait")
+            $bdArgs = @("/bdparams","/passbase64=`"$BdPassword`"","/noWait")
             $proc = Start-Process -FilePath $tempFile -ArgumentList $bdArgs -PassThru -ErrorAction Stop
             Set-WindowForeground -Proc $proc -TimeoutSeconds 15
             $timedOut = Wait-ProcessResponsive -Process $proc -TimeoutSeconds 600 -BusyText "Removendo Bitdefender..."
@@ -4897,210 +4896,6 @@ function Install-CrowdStrikeAndRemediateBitdefender {
     }
 
     return $true
-}
-
-# ==============================================================================
-# "Refrio - Desinstalar bitdefender e Instalar CrowdStrike" (item do PACOTE
-# EXTRA, selecionavel em lote junto com os demais - CrowdStrike, DELL
-# SupportAssist, TOTVS etc.)
-# Diferente do gate de EDR do proprio Pacote Extra (Install-CrowdStrike...
-# acima, que baixa um exe pre-empacotado com CID fixo), este instala o sensor
-# Falcon **via API** (auth OAuth2 -> CCID -> versao pela Sensor Update Policy
-# -> localizar instalador -> baixar com verificacao SHA256 -> instalar) quando
-# o CSFalconService nao esta presente. So depois do sensor confirmado a
-# Bitdefender e removida. Portado de um script de Intune Proactive Remediation
-# (Elgin-Falcon-Sensor-RemoveBit-WorkStation.ps1).
-#
-# Invoke-BitdefenderUninstallExtra segue a MESMA convencao de
-# Install-CrowdStrikeAndRemediateBitdefender (chamada dentro do loop de
-# instalacao em lote do Pacote Extra): sem Confirm-Action e sem
-# Show-Info/Warning/ErrorBox (popup por item travaria um lote com varios
-# selecionados) - so Write-Log e um bool de retorno, que vai pro relatorio
-# final via Export-InstallReport.
-# ==============================================================================
-
-# Espera um SERVICO aparecer sem travar a janela (mesmo padrao "nao trava" do
-# Wait-ProcessResponsive, so que testando Get-Service em vez de
-# Process.HasExited). Usado apos instalar o sensor Falcon via API: o servico
-# pode levar alguns segundos pra se registrar.
-function Wait-ServiceResponsive {
-    param([Parameter(Mandatory=$true)][string]$ServiceName,[int]$TimeoutSeconds=180,[string]$BusyText="Aguardando...")
-    $overlay = $null
-    try {
-        $overlayReader = [System.Xml.XmlNodeReader]::new([xml]$global:LoadingOverlayXaml)
-        $overlay = [System.Windows.Markup.XamlReader]::Load($overlayReader)
-        $overlay.Owner = $global:MainWindow
-        Set-DialogTheme -Dialog $overlay
-        $overlay.FindName("TxtLoadingStatus").Text = $BusyText
-    } catch { $overlay = $null }
-
-    $state = @{ Found = $false }
-    if ($overlay -ne $null) {
-        $start = Get-Date
-        $timer = New-Object System.Windows.Threading.DispatcherTimer
-        $timer.Interval = [TimeSpan]::FromSeconds(2)
-        $timer.Add_Tick({
-            if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
-                $state.Found = $true; $timer.Stop(); $overlay.Close()
-            } elseif (((Get-Date) - $start).TotalSeconds -gt $TimeoutSeconds) {
-                $timer.Stop(); $overlay.Close()
-            }
-        }.GetNewClosure())
-        $timer.Start()
-        [void]$overlay.ShowDialog()
-    } else {
-        $start = Get-Date
-        while (-not $state.Found -and ((Get-Date) - $start).TotalSeconds -lt $TimeoutSeconds) {
-            if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) { $state.Found = $true; break }
-            Start-Sleep -Milliseconds 500
-            if ($global:MainWindow -ne $null) { $global:MainWindow.Dispatcher.Invoke([System.Action]{}, [System.Windows.Threading.DispatcherPriority]::Background) }
-        }
-    }
-    return [bool]$state.Found
-}
-
-# Instala o sensor Falcon via API do CrowdStrike (nao um exe pre-empacotado).
-# Roda a sequencia inteira (auth -> CCID -> versao da policy -> localizar
-# instalador -> baixar com verificacao SHA256 -> instalar) num PROCESSO FILHO,
-# mesmo padrao ja usado por Update-InventarioCache e pelo download do SDIO
-# (ver secao "Padrao nao trava"): sao varias chamadas HTTPS em sequencia mais
-# o download do sensor (pode passar de 50MB), tempo de sobra pra travar a
-# janela WPF se rodasse na UI thread. Devolve um PSCustomObject com
-# ok/ccid/version/erro; o resultado e' trocado com o filho via arquivo JSON.
-function Install-FalconSensorViaApi {
-    $resultFile = Join-Path $env:TEMP ("elgin_falcon_install_{0}.json" -f [guid]::NewGuid().ToString("N").Substring(0,8))
-    $script     = Join-Path $env:TEMP ("elgin_falcon_install_{0}.ps1" -f [guid]::NewGuid().ToString("N").Substring(0,8))
-    $corpo = @'
-param([string]$BaseUrl,[string]$ClientId,[string]$ClientSecret,[string]$PolicyName,[string]$InstallParams,[string]$Saida)
-$ErrorActionPreference = 'Stop'
-try {
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $body = @{ client_id = $ClientId; client_secret = $ClientSecret }
-    $auth = Invoke-RestMethod -Uri "$BaseUrl/oauth2/token" -Method Post -Body $body -ContentType 'application/x-www-form-urlencoded'
-    if (-not $auth.access_token) { throw "Falcon nao retornou access_token." }
-    $headers = @{ Authorization = "Bearer $($auth.access_token)" }
-
-    $rCcid = Invoke-RestMethod -Uri "$BaseUrl/sensors/queries/installers/ccid/v1" -Headers $headers -Method Get
-    if (-not $rCcid.resources -or $rCcid.resources.Count -eq 0) { throw "CCID nao retornado (escopo 'Sensor Download: READ' ausente?)." }
-    $ccid = $rCcid.resources[0]
-
-    $filterPol = "platform_name:'Windows'+name.raw:'$PolicyName'"
-    $rPol = Invoke-RestMethod -Uri ("$BaseUrl/policy/combined/sensor-update/v2?filter=" + [uri]::EscapeDataString($filterPol)) -Headers $headers -Method Get
-    if (-not $rPol.resources -or $rPol.resources.Count -eq 0) { throw "Sensor Update Policy '$PolicyName' nao encontrada (escopo 'Sensor update policies: READ' ausente?)." }
-    $rawVer = $rPol.resources[0].settings.sensor_version
-    if (-not $rawVer) { throw "Policy '$PolicyName' nao possui sensor_version definida." }
-    # Remove sufixos de LTS (ex.: "7.10.16303 LTS") que a API de instaladores nao aceita no filtro de versao.
-    $version = ($rawVer -split '\s+')[0].Trim()
-
-    $filterIns = "platform:'windows'+version:'$version'"
-    $rIns = Invoke-RestMethod -Uri ("$BaseUrl/sensors/combined/installers/v3?filter=" + [uri]::EscapeDataString($filterIns)) -Headers $headers -Method Get
-    if (-not $rIns.resources -or $rIns.resources.Count -eq 0 -or -not $rIns.resources[0].sha256) { throw "Nenhum instalador encontrado para a versao '$version'." }
-    $inst = $rIns.resources[0]
-
-    $arquivo = Join-Path $env:TEMP $inst.name
-    $ProgressPreference = 'SilentlyContinue'
-    Invoke-WebRequest -Uri ("$BaseUrl/sensors/entities/download-installer/v3?id=" + $inst.sha256) -Headers $headers -UseBasicParsing -Method Get -OutFile $arquivo
-    if (-not (Test-Path $arquivo)) { throw "Download do instalador do Falcon Sensor falhou." }
-
-    $hashLocal = (Get-FileHash -Path $arquivo -Algorithm SHA256).Hash
-    if ($hashLocal -ne $inst.sha256) {
-        Remove-Item $arquivo -Force -ErrorAction SilentlyContinue
-        throw "Hash do instalador nao confere (esperado $($inst.sha256), obtido $hashLocal)."
-    }
-
-    $full = "$InstallParams CID=$ccid"
-    $p = Start-Process -FilePath $arquivo -ArgumentList $full -PassThru -Wait -ErrorAction SilentlyContinue
-    Remove-Item $arquivo -Force -ErrorAction SilentlyContinue
-    if (-not $p -or $p.ExitCode -ne 0) {
-        $code = if ($p) { $p.ExitCode } else { "processo nao iniciou" }
-        throw "Instalador do sensor Falcon retornou exit code $code."
-    }
-    [PSCustomObject]@{ ok=$true; ccid=$ccid; version=$version; erro="" } | ConvertTo-Json | Out-File -LiteralPath $Saida -Encoding UTF8 -Force
-    Write-Output ("OK: sensor Falcon instalado (versao {0})." -f $version)
-} catch {
-    [PSCustomObject]@{ ok=$false; ccid=""; version=""; erro=$_.Exception.Message } | ConvertTo-Json | Out-File -LiteralPath $Saida -Encoding UTF8 -Force
-    Write-Output ("FALHA: {0}" -f $_.Exception.Message)
-    exit 1
-}
-'@
-    try { $corpo | Out-File -LiteralPath $script -Encoding ASCII -Force } catch { return [PSCustomObject]@{ ok=$false; ccid=""; version=""; erro="Nao foi possivel gravar o script temporario." } }
-
-    $psExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-    $args  = @("-NoProfile","-ExecutionPolicy","Bypass","-File",$script,
-               "-BaseUrl",$global:FalconBaseUrl,"-ClientId",$global:FalconClientId,"-ClientSecret",$global:FalconClientSecret,
-               "-PolicyName",$global:FalconSensorUpdatePolicyName,"-InstallParams",$global:FalconInstallParams,"-Saida",$resultFile)
-    $r = Invoke-ManagedProcess -FilePath $psExe -Arguments $args -Description "[REFRIO] Instalacao do sensor Falcon via API" -TimeoutSeconds 900 -BusyText "Instalando o sensor CrowdStrike Falcon (baixando via API oficial)..."
-    try { if (Test-Path $script) { Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue } } catch {}
-
-    $resultado = $null
-    try { if (Test-Path $resultFile) { $resultado = Get-Content -LiteralPath $resultFile -Raw -ErrorAction Stop | ConvertFrom-Json } } catch {}
-    try { if (Test-Path $resultFile) { Remove-Item -LiteralPath $resultFile -Force -ErrorAction SilentlyContinue } } catch {}
-
-    if ($resultado -ne $null) { return $resultado }
-    # Sem arquivo de resultado (processo morreu antes de escrever) - monta um
-    # objeto de falha a partir do que o Invoke-ManagedProcess capturou.
-    return [PSCustomObject]@{ ok=$false; ccid=""; version=""; erro=(("exit {0}: {1}" -f $r.ExitCode, [string]$r.Output).Trim()) }
-}
-
-function Invoke-BitdefenderUninstallExtra {
-    param([Parameter(Mandatory=$true)]$App)
-
-    # 1. GATE DE SEGURANCA: a Bitdefender so e removida com o Falcon confirmado
-    # presente - se a instalacao via API falhar ou o servico nao aparecer, a
-    # funcao encerra aqui (retorna $false) e a Bitdefender NAO e tocada.
-    if (-not (Get-Service -Name "CSFalconService" -ErrorAction SilentlyContinue)) {
-        Write-Log -Message "[REFRIO] CSFalconService ausente - instalando o sensor Falcon via API antes de prosseguir." -Level "WARN"
-        $inst = Install-FalconSensorViaApi
-        if (-not $inst.ok) {
-            Write-Log -Message ("[REFRIO] Falha ao instalar o sensor Falcon: {0}. Bitdefender NAO sera removida." -f $inst.erro) -Level "ERROR"
-            return $false
-        }
-        Write-Log -Message ("[REFRIO] Sensor Falcon instalado via API (CCID {0}, versao {1}). Aguardando o servico registrar..." -f $inst.ccid,$inst.version) -Level "SUCCESS"
-        if (-not (Wait-ServiceResponsive -ServiceName "CSFalconService" -TimeoutSeconds $global:FalconInstallWaitSeconds -BusyText "Aguardando o servico CrowdStrike Falcon iniciar...")) {
-            Write-Log -Message ("[REFRIO] CSFalconService nao apareceu em {0}s apos a instalacao via API - Bitdefender NAO sera removida." -f $global:FalconInstallWaitSeconds) -Level "ERROR"
-            return $false
-        }
-    }
-    Write-Log -Message "[REFRIO] Sensor CrowdStrike Falcon confirmado. Prosseguindo com a remocao da Bitdefender." -Level "SUCCESS"
-
-    # 2. Bitdefender ja ausente? Nada a fazer - sucesso (nao ha o que remediar).
-    if (-not (Test-BitdefenderStillInstalled)) {
-        Write-Log -Message "[REFRIO] Bitdefender ja nao estava instalada. Nada a remediar." -Level "INFO"
-        return $true
-    }
-
-    # 3. Baixa e roda o desinstalador oficial com a JANELA OCULTA (-HideWindow):
-    # impede que um usuario logado clique em Cancelar no meio da remocao.
-    # Url/SilentArgs vem do proprio item do Pacote Extra (nao de globais) -
-    # mesmo padrao data-driven de Install-DirectApp.
-    $tempFile = Join-Path $env:TEMP ("elgin_refrio_bd_{0}.exe" -f [guid]::NewGuid().ToString("N").Substring(0,8))
-    try {
-        Set-Status "Baixando o desinstalador oficial da Bitdefender..."
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11
-        $prevProg = $ProgressPreference; $ProgressPreference = "SilentlyContinue"
-        Invoke-WebRequest -Uri $App.Url -OutFile $tempFile -UseBasicParsing -ErrorAction Stop
-        $ProgressPreference = $prevProg
-
-        $proc = Start-Process -FilePath $tempFile -ArgumentList $App.SilentArgs -PassThru -ErrorAction Stop
-        $timedOut = Wait-ProcessResponsive -Process $proc -TimeoutSeconds 600 -BusyText "Removendo a Bitdefender (janela oculta para nao ser cancelada)..." -HideWindow
-        if ($timedOut) { Write-Log -Message "[REFRIO] Timeout ao remover a Bitdefender." -Level "ERROR" }
-        else { Write-Log -Message ("[REFRIO] Uninstaller da Bitdefender retornou ExitCode {0}." -f $proc.ExitCode) -Level "INFO" }
-    } catch {
-        Write-Log -Message ("[REFRIO] Falha ao baixar/executar o desinstalador: {0}" -f $_.Exception.Message) -Level "ERROR"
-        return $false
-    } finally {
-        if (Test-Path $tempFile) { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue }
-    }
-
-    # 4. Validacao final: confirma no registro que saiu de verdade, nao so que
-    # o instalador retornou exit code 0.
-    if (Test-BitdefenderStillInstalled) {
-        Write-Log -Message "[REFRIO] Uninstaller executado, porem a Bitdefender ainda consta no registro de desinstalacao." -Level "ERROR"
-        return $false
-    } else {
-        Write-Log -Message "[REFRIO] Bitdefender removida com sucesso (sensor Falcon confirmado presente durante todo o processo)." -Level "SUCCESS"
-        return $true
-    }
 }
 
 # Pegar Senha do LAPS - pede o hostname, consulta a senha de administrador
@@ -6446,7 +6241,9 @@ function Show-MainWindow {
                 if ($app.Name -eq "CrowdStrike (Anti-Virus)") {
                     $results[$app.Name] = Install-CrowdStrikeAndRemediateBitdefender -App $app
                 } elseif ($app.Name -eq "Refrio - Desinstalar bitdefender e Instalar CrowdStrike") {
-                    $results[$app.Name] = Invoke-BitdefenderUninstallExtra -App $app
+                    # Mesma funcao do item acima, so com a senha de
+                    # desinstalacao da Bitdefender diferente.
+                    $results[$app.Name] = Install-CrowdStrikeAndRemediateBitdefender -App $app -BdPassword $global:RefrioBdPassword
                 } else {
                     $results[$app.Name] = Install-DirectApp -App $app
                 }
