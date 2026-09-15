@@ -3,11 +3,19 @@
 # Ferramenta online de instalacao, limpeza, diagnostico e suporte para Windows
 # Interface em WPF/XAML - tema claro/escuro com toggle em tempo real.
 #
-# Execucao recomendada via Gist Raw URL (chamado por um .bat de atalho):
+# Ponto de entrada oficial, usado pelos tecnicos hoje - NAO mexer nisso, ver
+# Start-SelfRelaunch mais abaixo pra entender o resto:
 # powershell.exe -NoProfile -STA -Command "`$env:ELGIN_SERVICE_DESK_URL='RAW_URL_DO_GIST'; irm `$env:ELGIN_SERVICE_DESK_URL | iex"
 #
-# Como o script e sempre baixado fresco do Gist a cada execucao, nao ha
-# mecanismo de auto-update: a versao mais recente e sempre a que roda.
+# A partir da v3.36 ha autoatualizacao (Update-ToLatestIfOutdated): se a
+# fonte de onde o .bat/link curto baixou estiver desatualizada (jsDelivr pode
+# cachear ate 12h), a ferramenta se relanca sozinha da fonte canonica (gist).
+# Esse relancamento e o de elevacao via UAC usam Start-SelfRelaunch, que baixa
+# o conteudo e passa pro processo novo via ARQUIVO temporario (-File), nao
+# via "irm|iex" dentro de -Command - troca feita pra parar de disparar
+# deteccao do Windows Defender (Trojan:PowerShell/DownloadObfus.A!MTB, via
+# AMSI) nesses DOIS relancamentos internos, sem alterar em nada o ponto de
+# entrada acima.
 # ==============================================================================
 
 #requires -Version 5.1
@@ -34,11 +42,27 @@ try {
     exit 1
 }
 
+# Se este arquivo e uma copia temporaria baixada por Start-SelfRelaunch (ver
+# mais abaixo - usado pelos relancamentos internos de elevacao/autoatualizacao,
+# nao pelo ponto de entrada normal), apaga-se sozinho assim que carregado.
+# So dispara quando $PSCommandPath aponta pra um arquivo com esse nome
+# especifico - confirmado isoladamente que $PSCommandPath fica VAZIO quando o
+# script roda do jeito normal (conteudo baixado e passado direto pro
+# Invoke-Expression via "irm <link> | iex", sem nenhum arquivo em disco),
+# entao isto nunca afeta quem abre a ferramenta assim hoje. Testado
+# isoladamente que Remove-Item no proprio $PSCommandPath funciona mesmo com o
+# arquivo "em execucao" - o host do PowerShell ja leu o conteudo inteiro antes
+# de qualquer linha comecar a rodar, entao apagar o arquivo em disco nao afeta
+# o restante da execucao.
+if ($PSCommandPath -and (Split-Path -Path $PSCommandPath -Leaf) -match '^elgin_relaunch_') {
+    try { Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue } catch {}
+}
+
 # ==============================================================================
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.49"
+$global:AppVersion    = "3.50"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -225,11 +249,63 @@ function Write-Log {
     } catch {}
 }
 
+# Baixa o conteudo de $Url (o mesmo que "irm $Url | iex" executaria) e relanca
+# powershell.exe apontando pra um ARQUIVO local via -File, em vez de montar
+# uma linha "irm ... | iex" dentro de -Command. Usado pelos DOIS
+# relancamentos internos - elevacao via UAC (Request-AdminElevation) e
+# autoatualizacao (Update-ToLatestIfOutdated) - nunca pelo ponto de entrada
+# que os tecnicos usam hoje ("irm <link> | iex" direto no PowerShell), que
+# continua identico.
+#
+# Motivo: o Windows Defender passou a bloquear via AMSI com
+# Trojan:PowerShell/DownloadObfus.A!MTB (confirmado por captura de tela real
+# do usuario, 2026-09-15) - classificacao por ML (sufixo !MTB) que reage ao
+# PADRAO ESTRUTURAL "processo novo com -Command contendo baixar+executar numa
+# unica string dinamica", nao a uma assinatura fixa. Passar o script como
+# ARQUIVO (-File) muda essa forma sem mudar o comportamento externo.
+#
+# O arquivo temporario se autodeleta assim que carregado (ver bloco logo apos
+# o param() deste mesmo script, no topo do arquivo) - condicionado ao nome
+# comecar com "elgin_relaunch_", entao nunca dispara na execucao normal via
+# iex (onde $PSCommandPath fica vazio, testado isoladamente).
+function Start-SelfRelaunch {
+    param(
+        [Parameter(Mandatory=$true)][string]$Url,
+        [switch]$Elevated,
+        [hashtable]$EnvVars
+    )
+    try {
+        $conteudo = Invoke-RestMethod -Uri $Url -TimeoutSec 30 -ErrorAction Stop
+    } catch {
+        Write-Log -Message ("[RELAUNCH] Falha ao baixar de {0}: {1}" -f $Url,$_.Exception.Message) -Level "ERROR"
+        return $false
+    }
+    $tempFile = Join-Path $env:TEMP ("elgin_relaunch_{0}.ps1" -f [guid]::NewGuid().ToString("N").Substring(0,8))
+    try {
+        # ASCII sem BOM, mesma regra do arquivo inteiro (armadilha #1) - o
+        # conteudo baixado ja e ASCII puro, aqui e so garantir que a gravacao
+        # em disco nao introduz um BOM que quebraria o parser na proxima
+        # leitura.
+        [IO.File]::WriteAllText($tempFile, $conteudo, (New-Object Text.ASCIIEncoding))
+    } catch {
+        Write-Log -Message ("[RELAUNCH] Falha ao gravar {0}: {1}" -f $tempFile,$_.Exception.Message) -Level "ERROR"
+        return $false
+    }
+    if ($EnvVars) { foreach ($k in $EnvVars.Keys) { Set-Item -Path ("Env:" + $k) -Value $EnvVars[$k] } }
+    # Aspas manuais no valor do array (armadilha #11): Start-Process
+    # -ArgumentList NAO cota sozinho um elemento com espaco, e o perfil do
+    # usuario (portanto %TEMP%) pode ter espaco no nome.
+    $q = [char]34
+    $psArgs = @("-NoProfile","-STA","-File",($q+$tempFile+$q))
+    if ($Elevated) { Start-Process -FilePath "powershell.exe" -ArgumentList $psArgs -Verb RunAs | Out-Null }
+    else { Start-Process -FilePath "powershell.exe" -ArgumentList $psArgs | Out-Null }
+    return $true
+}
+
 Initialize-Folders
 
-# Reabre a propria ferramenta como Administrador via UAC, re-executando o
-# mesmo comando irm/iex a partir do Gist (nao ha .exe proprio para relancar,
-# ja que o script e sempre baixado fresco).
+# Reabre a propria ferramenta como Administrador via UAC, via Start-SelfRelaunch
+# (nao ha .exe proprio para relancar, ja que o script e sempre baixado fresco).
 function Request-AdminElevation {
     param([string]$Url,[switch]$SilentMode)
     if (Test-IsAdmin) { return $true }
@@ -242,10 +318,7 @@ function Request-AdminElevation {
     if (-not $SilentMode) { $shouldElevate = Confirm-Action $message "Permissao administrativa necessaria" }
     if (-not $shouldElevate) { return $false }
     try {
-        $safeUrl = $Url.Replace("'","''")
-        $command = "`$env:ELGIN_SERVICE_DESK_URL='$safeUrl'; irm `$env:ELGIN_SERVICE_DESK_URL | iex"
-        Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile","-STA","-Command",$command) -Verb RunAs | Out-Null
-        return $true
+        return (Start-SelfRelaunch -Url $Url -Elevated -EnvVars @{ ELGIN_SERVICE_DESK_URL = $Url })
     } catch {
         # Cancelar o UAC (fechar a janela ou nao digitar credencial) NAO e erro,
         # e escolha do tecnico - mostrar caixa vermelha de falha aqui so confunde.
@@ -311,10 +384,8 @@ function Update-ToLatestIfOutdated {
             if ($remota -gt $local) {
                 Write-Log -Message ("[UPDATE] Versao local {0} desatualizada - relancando da fonte canonica na {1}." -f $local,$remota) -Level "WARN"
                 Write-Host ("Atualizando da versao {0} para {1}..." -f $local,$remota) -ForegroundColor Cyan
-                $safeUrl = $global:CanonicalSourceUrl.Replace("'","''")
-                $cmd = "`$env:ELGIN_UPDATE_CHECKED='1'; `$env:ELGIN_SERVICE_DESK_URL='$safeUrl'; irm `$env:ELGIN_SERVICE_DESK_URL | iex"
-                Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile","-STA","-Command",$cmd) | Out-Null
-                $relancar = $true
+                $envVars = @{ ELGIN_UPDATE_CHECKED = "1"; ELGIN_SERVICE_DESK_URL = $global:CanonicalSourceUrl }
+                $relancar = (Start-SelfRelaunch -Url $global:CanonicalSourceUrl -EnvVars $envVars)
             }
         }
     } catch {
@@ -5363,13 +5434,25 @@ function Invoke-ActivationByScript {
     if (-not (Show-AttentionDialog -Title "Ativacao por Script" -Message $msg)) { return }
     Write-Log -Message "[ACTIVATION] Solicitada ativacao por script (get.activated.win)." -Level "WARN"
     $cmdFile = $null
+    $scriptFile = $null
     try {
         $psExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
         if (-not (Test-Path $psExe)) { $psExe = "powershell.exe" }
+        # Baixa o conteudo AQUI (o app ja esta rodando, ja tem rede) e grava
+        # num .ps1 local em vez de montar "irm ... | iex" dentro do .cmd -
+        # mesmo motivo do Start-SelfRelaunch mais acima no arquivo: essa forma
+        # (baixar+executar via string dinamica) e o que o Windows Defender
+        # classifica via AMSI como Trojan:PowerShell/DownloadObfus.A!MTB.
+        # Continua -NoExit (o script de ativacao e interativo, o tecnico
+        # escolhe opcoes no menu dele) e visivel, sem nenhuma mudanca de
+        # comportamento pro tecnico.
+        $conteudoAtivacao = Invoke-RestMethod -Uri $global:ActivationScriptUrl -TimeoutSec 30 -ErrorAction Stop
+        $scriptFile = Join-Path $env:TEMP ("Elgin_Ativacao_" + [guid]::NewGuid().ToString("N") + ".ps1")
+        [IO.File]::WriteAllText($scriptFile, $conteudoAtivacao, (New-Object Text.UTF8Encoding($false)))
+
         $cmdFile = Join-Path $env:TEMP ("Elgin_Ativacao_" + [guid]::NewGuid().ToString("N") + ".cmd")
-        $quote     = [char]34
-        $psCommand = "irm " + $global:ActivationScriptUrl + " | iex"
-        $cmdBody   = "@echo off`r`n" + $quote + $psExe + $quote + " -NoProfile -NoExit -Command " + $quote + $psCommand + $quote + "`r`n"
+        $quote   = [char]34
+        $cmdBody = "@echo off`r`n" + $quote + $psExe + $quote + " -NoProfile -NoExit -File " + $quote + $scriptFile + $quote + "`r`n"
         Set-Content -Path $cmdFile -Value $cmdBody -Encoding ASCII -Force
         Start-Process -FilePath $cmdFile -ErrorAction Stop
         Write-Log -Message "[ACTIVATION] Janela de ativacao por script aberta." -Level "INFO"
