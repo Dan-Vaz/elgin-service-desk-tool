@@ -62,7 +62,7 @@ if ($PSCommandPath -and (Split-Path -Path $PSCommandPath -Leaf) -match '^elgin_r
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.50"
+$global:AppVersion    = "3.51"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -4567,7 +4567,7 @@ function Get-InventarioTipos {
         [PSCustomObject]@{ Id=3; Label=(Get-Acentuado "Devolu\xE7\xE3o"); Assunto=(Get-Acentuado "Atualiza\xE7\xE3o de Invent\xE1rio"); Intro=(Get-Acentuado "atualiza\xE7\xE3o"); PedeHostname=$true; UsuarioFixo="Estoque"; PermiteCelular=$true; PrecisaOcs=$false;
             Campos=@((Get-Acentuado "Usu\xE1rio"),"Modelo","Etiqueta","S/N","Tipo","Hostname","Windows","Office","Processador",(Get-Acentuado "Mem\xF3ria"),"SSD") }
         [PSCustomObject]@{ Id=4; Label="Celular"; Assunto=(Get-Acentuado "Atualiza\xE7\xE3o de Invent\xE1rio - Celular"); Intro=(Get-Acentuado "atualiza\xE7\xE3o"); PedeHostname=$false; UsuarioFixo=""; PermiteCelular=$false; PrecisaOcs=$false;
-            Campos=@((Get-Acentuado "Usu\xE1rio"),"Modelo",(Get-Acentuado "N\xFAmero do telefone"),"ID PULSUS","IMEI","EID") }
+            Campos=@((Get-Acentuado "N\xFAmero linha"),"Nome colaborador","Cargo colaborador",(Get-Acentuado "\xC1rea colaborador"),"Modelo celular",(Get-Acentuado "Chip bloqueado (Sim/N\xE3o)")) }
         [PSCustomObject]@{ Id=5; Label="Software"; Assunto=(Get-Acentuado "Atualiza\xE7\xE3o de Invent\xE1rio - Software"); Intro=(Get-Acentuado "atualiza\xE7\xE3o"); PedeHostname=$true; UsuarioFixo=""; PermiteCelular=$false; PrecisaOcs=$false;
             Campos=@((Get-Acentuado "Usu\xE1rio"),"Etiqueta","Nome do Software",(Get-Acentuado "Chave de Licen\xE7a")) }
     )
