@@ -62,7 +62,7 @@ if ($PSCommandPath -and (Split-Path -Path $PSCommandPath -Leaf) -match '^elgin_r
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.52"
+$global:AppVersion    = "3.53"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -897,6 +897,17 @@ function Get-ThemeResourceDictionaryXaml {
 function Save-UiPrefs {
     param([string]$Theme)
     try { [PSCustomObject]@{ Theme = $Theme } | ConvertTo-Json | Out-File $global:UiPrefsFile -Encoding UTF8 -Force } catch {}
+}
+
+# Tema do Windows (Configuracoes > Personalizacao > Cores > "Escolha seu modo").
+# AppsUseLightTheme: 0 = escuro, 1 = claro. Se a chave nao existir (Windows
+# antigo ou sem personalizacao), assume claro.
+function Get-SystemTheme {
+    try {
+        $v = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name AppsUseLightTheme -ErrorAction Stop).AppsUseLightTheme
+        if ($v -eq 0) { return "Dark" }
+    } catch {}
+    return "Light"
 }
 
 function Set-AppTheme {
@@ -5895,10 +5906,12 @@ function Show-MainWindow {
         $e.Handled = $true
     })
 
-    # Sempre abre no tema claro, independente do que foi salvo da ultima vez
-    # que o tecnico trocou de tema - troca continua disponivel a qualquer
-    # momento pelo botao "Tema" na barra superior.
-    Set-AppTheme -Theme "Light"
+    # Abre no tema que o Windows esta usando (claro/escuro), independente do
+    # que foi salvo da ultima vez. A troca manual continua disponivel pelo
+    # botao "Tema" na barra superior, e uma mudanca do tema do sistema com a
+    # ferramenta aberta e acompanhada (ver statsTimer).
+    $global:LastSystemTheme = Get-SystemTheme
+    Set-AppTheme -Theme $global:LastSystemTheme
 
     if (Test-Path $global:IconFile) {
         try { $window.Icon = New-Object System.Windows.Media.Imaging.BitmapImage([uri]$global:IconFile) } catch {}
@@ -6077,6 +6090,13 @@ function Show-MainWindow {
         $tbCpu.Text  = "CPU " + $snap.Cpu
         $tbRam.Text  = "RAM " + $snap.Ram
         $tbDisk.Text = $snap.Disk
+        # Acompanha o tema do Windows: so reage quando o valor do SISTEMA
+        # muda, entao uma troca manual pelo botao nao e desfeita a cada tick.
+        $temaSistema = Get-SystemTheme
+        if ($temaSistema -ne $global:LastSystemTheme) {
+            $global:LastSystemTheme = $temaSistema
+            if ($temaSistema -ne $global:CurrentTheme) { Set-AppTheme -Theme $temaSistema }
+        }
     }.GetNewClosure())
 
     # ---- Checklist (Formatacao/Configuracao) ----
