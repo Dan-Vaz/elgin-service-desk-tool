@@ -62,7 +62,7 @@ if ($PSCommandPath -and (Split-Path -Path $PSCommandPath -Leaf) -match '^elgin_r
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.51"
+$global:AppVersion    = "3.52"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -4985,16 +4985,24 @@ function Install-CrowdStrikeAndRemediateBitdefender {
 # local nao funcionaria na maquina de outro tecnico. Usa os dialogos WPF
 # ja padronizados do app (Show-TextResultDialog/Show-Warning/Show-ErrorBox)
 # em vez de Windows.Forms/Microsoft.VisualBasic do script original.
+$global:LapsFixedUser        = "elgin\daniel.vaz"
+$global:LapsFixedPasswordB64 = "ASwJWVoXYXUSVVlAQg=="
+$global:LapsFixedKey         = "Elgin.SD#laps/k3y"
+function Get-LapsFixedSecret {
+    $d = [Convert]::FromBase64String($global:LapsFixedPasswordB64)
+    $k = [Text.Encoding]::UTF8.GetBytes($global:LapsFixedKey)
+    $r = New-Object byte[] $d.Length
+    for ($i = 0; $i -lt $d.Length; $i++) { $r[$i] = $d[$i] -bxor $k[$i % $k.Length] }
+    return [Text.Encoding]::UTF8.GetString($r)
+}
 $script:LapsHostnameDialogXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Pegar Senha do LAPS" Height="360" Width="420"
+        Title="Pegar Senha do LAPS" Height="215" Width="420"
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
         Background="{DynamicResource BrushSurface}">
     <Grid Margin="20">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/><RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
@@ -5002,10 +5010,7 @@ $script:LapsHostnameDialogXaml = @'
         <TextBlock Grid.Row="0" Text="Consulta de Senha LAPS" Foreground="{DynamicResource BrushText}" FontWeight="Bold"/>
         <TextBlock Grid.Row="1" Text="Informe o hostname do computador:" Foreground="{DynamicResource BrushTextMuted}" FontSize="11" Margin="0,4,0,14"/>
         <TextBox x:Name="TxtLapsHostname" Grid.Row="2" Height="30" Padding="6,4" VerticalAlignment="Top" Background="{DynamicResource BrushInputBg}" Foreground="{DynamicResource BrushText}" BorderBrush="{DynamicResource BrushInputBorder}"/>
-        <TextBlock Grid.Row="3" Text="Credencial (opcional - so preencha se a conta usada pra elevar a ferramenta no UAC nao tiver permissao de leitura do LAPS no AD):" Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,14,0,4"/>
-        <TextBox x:Name="TxtLapsUser" Grid.Row="4" Height="30" Padding="6,4" Text="DOMINIO\usuario" Foreground="{DynamicResource BrushTextFaint}" Background="{DynamicResource BrushInputBg}" BorderBrush="{DynamicResource BrushInputBorder}" Margin="0,0,0,8"/>
-        <PasswordBox x:Name="PwdLaps" Grid.Row="5" Height="30" Padding="6,4" Background="{DynamicResource BrushInputBg}" Foreground="{DynamicResource BrushText}" BorderBrush="{DynamicResource BrushInputBorder}"/>
-        <StackPanel Grid.Row="8" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
             <Button x:Name="BtnCancelar" Content="Cancelar" Width="100" Height="34" Margin="0,0,10,0" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" BorderThickness="0"/>
             <Button x:Name="BtnConsultar" Content="Consultar" Width="120" Height="34" Background="{DynamicResource BrushAccent}" Foreground="White" BorderThickness="0" FontWeight="Bold"/>
         </StackPanel>
@@ -5020,22 +5025,13 @@ function Show-LapsHostnameDialog {
     Set-DialogTheme -Dialog $dlg
 
     $txtHost = $dlg.FindName("TxtLapsHostname")
-    $txtUser = $dlg.FindName("TxtLapsUser")
-    $pwdBox  = $dlg.FindName("PwdLaps")
-    $txtUser.Add_GotFocus({ if ($txtUser.Text -eq "DOMINIO\usuario") { $txtUser.Text = "" } }.GetNewClosure())
-    $txtUser.Add_LostFocus({ if ([string]::IsNullOrWhiteSpace($txtUser.Text)) { $txtUser.Text = "DOMINIO\usuario" } }.GetNewClosure())
 
     $global:LapsHostnameDialogResult = $null
     $dlg.FindName("BtnConsultar").Add_Click({
         $h = $txtHost.Text.Trim()
         if ([string]::IsNullOrWhiteSpace($h)) { Show-Warning "Informe o hostname."; return }
-        $user = $txtUser.Text.Trim()
-        if ($user -eq "DOMINIO\usuario") { $user = "" }
-        $cred = $null
-        if (-not [string]::IsNullOrWhiteSpace($user)) {
-            if ($pwdBox.SecurePassword.Length -eq 0) { Show-Warning "Informe a senha da credencial, ou deixe usuario e senha em branco pra usar a sessao atual."; return }
-            $cred = New-Object System.Management.Automation.PSCredential($user,$pwdBox.SecurePassword)
-        }
+        $secure = ConvertTo-SecureString -String (Get-LapsFixedSecret) -AsPlainText -Force
+        $cred = New-Object System.Management.Automation.PSCredential($global:LapsFixedUser,$secure)
         $global:LapsHostnameDialogResult = [PSCustomObject]@{ Hostname=$h; Credential=$cred }
         $dlg.DialogResult = $true
         $dlg.Close()
