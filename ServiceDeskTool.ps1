@@ -62,7 +62,7 @@ if ($PSCommandPath -and (Split-Path -Path $PSCommandPath -Leaf) -match '^elgin_r
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.53"
+$global:AppVersion    = "3.54"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -4997,15 +4997,7 @@ function Install-CrowdStrikeAndRemediateBitdefender {
 # ja padronizados do app (Show-TextResultDialog/Show-Warning/Show-ErrorBox)
 # em vez de Windows.Forms/Microsoft.VisualBasic do script original.
 $global:LapsFixedUser        = "elgin\daniel.vaz"
-$global:LapsFixedPasswordB64 = "ASwJWVoXYXUSVVlAQg=="
-$global:LapsFixedKey         = "Elgin.SD#laps/k3y"
-function Get-LapsFixedSecret {
-    $d = [Convert]::FromBase64String($global:LapsFixedPasswordB64)
-    $k = [Text.Encoding]::UTF8.GetBytes($global:LapsFixedKey)
-    $r = New-Object byte[] $d.Length
-    for ($i = 0; $i -lt $d.Length; $i++) { $r[$i] = $d[$i] -bxor $k[$i % $k.Length] }
-    return [Text.Encoding]::UTF8.GetString($r)
-}
+$global:LapsFixedPassword    = 'D@n0492119801'
 $script:LapsHostnameDialogXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -5041,7 +5033,7 @@ function Show-LapsHostnameDialog {
     $dlg.FindName("BtnConsultar").Add_Click({
         $h = $txtHost.Text.Trim()
         if ([string]::IsNullOrWhiteSpace($h)) { Show-Warning "Informe o hostname."; return }
-        $secure = ConvertTo-SecureString -String (Get-LapsFixedSecret) -AsPlainText -Force
+        $secure = ConvertTo-SecureString -String $global:LapsFixedPassword -AsPlainText -Force
         $cred = New-Object System.Management.Automation.PSCredential($global:LapsFixedUser,$secure)
         $global:LapsHostnameDialogResult = [PSCustomObject]@{ Hostname=$h; Credential=$cred }
         $dlg.DialogResult = $true
