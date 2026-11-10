@@ -5049,7 +5049,7 @@ function Install-CrowdStrikeAndRemediateBitdefender {
 # ja padronizados do app (Show-TextResultDialog/Show-Warning/Show-ErrorBox)
 # em vez de Windows.Forms/Microsoft.VisualBasic do script original.
 $global:LapsFixedUser        = 'elgin\daniel.vaz'
-$global:LapsFixedPassword    = 'D@n0492119801'
+$global:LapsFixedPassword    = 'D@n0492119802'
 # Credencial fixa em texto, SEM decodificador: laco de cifra com chave no
 # arquivo (XOR) faz o Defender/AMSI bloquear o script inteiro como
 # VirTool:PowerShell/MaleficAms.M (confirmado em 2026-11-10 nas v3.52/v3.53).
