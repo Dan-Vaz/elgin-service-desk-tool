@@ -5039,7 +5039,7 @@ function Install-CrowdStrikeAndRemediateBitdefender {
 # local nao funcionaria na maquina de outro tecnico. Usa os dialogos WPF
 # ja padronizados do app (Show-TextResultDialog/Show-Warning/Show-ErrorBox)
 # em vez de Windows.Forms/Microsoft.VisualBasic do script original.
-$global:LapsFixedUser        = "elgin\daniel.vaz"
+$global:LapsFixedUser        = 'elgin\daniel.vaz'
 $global:LapsFixedPassword    = 'D@n0492119801'
 # Credencial fixa em texto, SEM decodificador: laco de cifra com chave no
 # arquivo (XOR) faz o Defender/AMSI bloquear o script inteiro como
