@@ -62,7 +62,7 @@ if ($PSCommandPath -and (Split-Path -Path $PSCommandPath -Leaf) -match '^elgin_r
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.54"
+$global:AppVersion    = "3.55"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -3169,6 +3169,18 @@ $script:XamlHead = @'
                                 <TextBlock Grid.Column="1" Text="Logs" Style="{StaticResource SidebarNavLabel}"/>
                             </Grid>
                         </Button>
+                        <Button x:Name="NavAdmin" Style="{StaticResource SidebarButton}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource SidebarNavIcon}" Background="#F43F5E">
+                                    <TextBlock Text="AD" Style="{StaticResource SidebarNavIconText}"/>
+                                </Border>
+                                <TextBlock Grid.Column="1" Text="Administracao" Style="{StaticResource SidebarNavLabel}"/>
+                            </Grid>
+                        </Button>
                     </StackPanel>
                 </ScrollViewer>
             </DockPanel>
@@ -3472,6 +3484,37 @@ $script:XamlPanelsC = @'
                         <TextBox x:Name="TxtLogs" Background="Transparent" Foreground="{DynamicResource BrushText}" FontFamily="Consolas" FontSize="12" Padding="10"
                                  BorderThickness="0" IsReadOnly="True" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
                     </Border>
+                </Grid>
+
+                <!-- Administracao (protegida por senha) -->
+                <Grid x:Name="PanelAdmin" Visibility="Collapsed">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="Administracao" Foreground="{DynamicResource BrushText}" FontSize="22" FontWeight="Bold" Margin="0,0,0,4"/>
+                    <TextBlock Grid.Row="1" Text="Configuracoes restritas da ferramenta." Foreground="{DynamicResource BrushTextMuted}" FontSize="12" Margin="0,0,0,14"/>
+                    <ScrollViewer Grid.Row="2">
+                        <StackPanel>
+                            <Border Margin="0,0,0,12" Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="ACESSO DA FERRAMENTA LAPS" Foreground="#F43F5E" FontSize="12" FontWeight="Bold" Margin="0,0,0,6"/>
+                                    <TextBlock Text="Conta usada por 'Pegar Senha do LAPS' (Ferramentas). Os tecnicos nao digitam login nem senha." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <TextBlock x:Name="TxtAdminLapsStatus" Text="" Foreground="{DynamicResource BrushText}" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <TextBlock Text="Login" Width="70" Foreground="{DynamicResource BrushTextMuted}" FontSize="12" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="TxtAdminLapsUser" Width="300" Height="30" Padding="6,4" Background="{DynamicResource BrushInputBg}" Foreground="{DynamicResource BrushText}" BorderBrush="{DynamicResource BrushInputBorder}"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                        <TextBlock Text="Senha" Width="70" Foreground="{DynamicResource BrushTextMuted}" FontSize="12" VerticalAlignment="Center"/>
+                                        <PasswordBox x:Name="PwdAdminLaps" Width="300" Height="30" Padding="6,4" Background="{DynamicResource BrushInputBg}" Foreground="{DynamicResource BrushText}" BorderBrush="{DynamicResource BrushInputBorder}"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button x:Name="BtnAdminLapsSalvar" Content="Salvar" Height="32" Width="130" Style="{StaticResource CardButton}" Background="#F43F5E" Margin="0,0,10,0"/>
+                                        <Button x:Name="BtnAdminLapsRemover" Content="Remover local" Height="32" Width="130" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
+                                    </StackPanel>
+                                    <TextBlock Text="Ao salvar, a credencial vale NESTA maquina na hora. Para valer para todos os tecnicos, o valor gerado entra no codigo e a versao e publicada (o bloco pronto e copiado para a area de transferencia)." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,12,0,0"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
                 </Grid>
             </Grid>
 
@@ -4998,6 +5041,34 @@ function Install-CrowdStrikeAndRemediateBitdefender {
 # em vez de Windows.Forms/Microsoft.VisualBasic do script original.
 $global:LapsFixedUser        = "elgin\daniel.vaz"
 $global:LapsFixedPassword    = 'D@n0492119801'
+# Credencial fixa em texto, SEM decodificador: laco de cifra com chave no
+# arquivo (XOR) faz o Defender/AMSI bloquear o script inteiro como
+# VirTool:PowerShell/MaleficAms.M (confirmado em 2026-11-10 nas v3.52/v3.53).
+function Get-LapsFixedSecret { return $global:LapsFixedPassword }
+# Texto puro <-> base64, usado so no arquivo local salvo pela aba Administracao
+# (nao e criptografia).
+function ConvertTo-LapsObfuscated {
+    param([string]$Plain)
+    return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Plain))
+}
+# Credencial salva pela aba Administracao NESTA maquina (precedencia sobre a
+# embutida no codigo). Serve pra testar antes de publicar a versao nova; para
+# valer para todos os tecnicos o valor precisa ir pro codigo e ser publicado.
+$global:LapsCredFile = Join-Path $env:LOCALAPPDATA "ElginServiceDesk\laps_cred.json"
+function Get-LapsActiveCredential {
+    try {
+        if (Test-Path -LiteralPath $global:LapsCredFile) {
+            $j = Get-Content -LiteralPath $global:LapsCredFile -Raw -ErrorAction Stop | ConvertFrom-Json
+            if ($j.User -and $j.PasswordB64) {
+                $pw = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$j.PasswordB64))
+                return [PSCustomObject]@{ User=[string]$j.User; Password=$pw; Source="Local" }
+            }
+        }
+    } catch {
+        Write-Log -Message ("[LAPS] Credencial local ilegivel, usando a padrao: {0}" -f $_.Exception.Message) -Level "WARN"
+    }
+    return [PSCustomObject]@{ User=$global:LapsFixedUser; Password=(Get-LapsFixedSecret); Source="Padrao" }
+}
 $script:LapsHostnameDialogXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -5033,8 +5104,9 @@ function Show-LapsHostnameDialog {
     $dlg.FindName("BtnConsultar").Add_Click({
         $h = $txtHost.Text.Trim()
         if ([string]::IsNullOrWhiteSpace($h)) { Show-Warning "Informe o hostname."; return }
-        $secure = ConvertTo-SecureString -String $global:LapsFixedPassword -AsPlainText -Force
-        $cred = New-Object System.Management.Automation.PSCredential($global:LapsFixedUser,$secure)
+        $ativa = Get-LapsActiveCredential
+        $secure = ConvertTo-SecureString -String $ativa.Password -AsPlainText -Force
+        $cred = New-Object System.Management.Automation.PSCredential($ativa.User,$secure)
         $global:LapsHostnameDialogResult = [PSCustomObject]@{ Hostname=$h; Credential=$cred }
         $dlg.DialogResult = $true
         $dlg.Close()
@@ -5076,6 +5148,66 @@ function Invoke-LapsPasswordLookup {
         Write-Log -Message ("[LAPS] Falha ao consultar {0}: {1}" -f $hostname,$_.Exception.Message) -Level "ERROR"
         Show-ErrorBox ("Erro ao consultar a senha LAPS.`n`n{0}" -f $_.Exception.Message)
     }
+}
+
+# Aba Administracao: so abre mediante senha. A senha nao fica em texto puro no
+# codigo (so o hash SHA-256 com sal), mas isto e uma TRAVA DE USO, nao seguranca
+# real: o script e publico e roda no cliente, entao quem quiser contorna
+# lendo o codigo (e uma senha de 6 digitos cai em forca bruta em segundos).
+$global:AdminPasswordHash = "cc8b4ab0a4cf379e238b110d6682dd22f74f2de85d3064b73cc1d47bbb1c44f7"
+function Test-AdminPassword {
+    param([string]$Password)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $h = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes("ElginSD.admin|" + $Password))
+    $hex = ($h | ForEach-Object { $_.ToString('x2') }) -join ''
+    return ($hex -eq $global:AdminPasswordHash)
+}
+$script:AdminPasswordDialogXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Administracao" Height="205" Width="380"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        Background="{DynamicResource BrushSurface}">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/><RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <TextBlock Grid.Row="0" Text="Area restrita" Foreground="{DynamicResource BrushText}" FontWeight="Bold"/>
+        <TextBlock Grid.Row="1" Text="Informe a senha de administracao:" Foreground="{DynamicResource BrushTextMuted}" FontSize="11" Margin="0,4,0,14"/>
+        <PasswordBox x:Name="PwdAdmin" Grid.Row="2" Height="30" Padding="6,4" VerticalAlignment="Top" Background="{DynamicResource BrushInputBg}" Foreground="{DynamicResource BrushText}" BorderBrush="{DynamicResource BrushInputBorder}"/>
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button x:Name="BtnAdminCancelar" Content="Cancelar" Width="100" Height="34" Margin="0,0,10,0" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}" BorderThickness="0"/>
+            <Button x:Name="BtnAdminEntrar" Content="Entrar" Width="120" Height="34" Background="{DynamicResource BrushAccent}" Foreground="White" BorderThickness="0" FontWeight="Bold" IsDefault="True"/>
+        </StackPanel>
+    </Grid>
+</Window>
+'@
+
+function Show-AdminPasswordDialog {
+    $reader = [System.Xml.XmlNodeReader]::new([xml]$script:AdminPasswordDialogXaml)
+    $dlg = [System.Windows.Markup.XamlReader]::Load($reader)
+    $dlg.Owner = $global:MainWindow
+    Set-DialogTheme -Dialog $dlg
+
+    $pwd = $dlg.FindName("PwdAdmin")
+    $global:AdminDialogOk = $false
+    $dlg.FindName("BtnAdminEntrar").Add_Click({
+        if (Test-AdminPassword -Password $pwd.Password) {
+            $global:AdminDialogOk = $true
+            $dlg.Close()
+        } else {
+            Write-Log -Message "[ADMIN] Tentativa de acesso com senha incorreta." -Level "WARN"
+            Show-Warning "Senha incorreta."
+            $pwd.Clear()
+            $pwd.Focus() | Out-Null
+        }
+    }.GetNewClosure())
+    $dlg.FindName("BtnAdminCancelar").Add_Click({ $dlg.Close() }.GetNewClosure())
+    $dlg.Add_ContentRendered({ $pwd.Focus() | Out-Null }.GetNewClosure())
+    [void]$dlg.ShowDialog()
+    return $global:AdminDialogOk
 }
 
 function Show-UninstallerDialog {
@@ -5935,6 +6067,7 @@ function Show-MainWindow {
         Limpeza   = $window.FindName("PanelLimpeza")
         Ferramentas = $window.FindName("PanelFerramentas")
         Logs      = $window.FindName("PanelLogs")
+        Admin     = $window.FindName("PanelAdmin")
     }
     $navButtons = @{
         Inicio    = $window.FindName("NavInicio")
@@ -5948,11 +6081,12 @@ function Show-MainWindow {
         Limpeza   = $window.FindName("NavLimpeza")
         Ferramentas = $window.FindName("NavFerramentas")
         Logs      = $window.FindName("NavLogs")
+        Admin     = $window.FindName("NavAdmin")
     }
     $panelTitles = @{
         Inicio="Inicio"; Checklist="Checklist"; Instalar="Instalar Aplicativos"; Drivers="Drivers"; Inventario="Enviar Inventario"
         Diagnostico="Diagnostico"; Rede="Rede"; Impressao="Impressao"; Limpeza="Limpeza e Otimizacao"
-        Ferramentas="Ferramentas"; Logs="Logs"
+        Ferramentas="Ferramentas"; Logs="Logs"; Admin="Administracao"
     }
     # Scriptblock (nao function aninhada) - funcoes definidas dentro de outra
     # funcao nao ficam visiveis de dentro de closures de eventos WPF (Add_Click),
@@ -5971,7 +6105,14 @@ function Show-MainWindow {
     $global:ShowSectionRef = $ShowSection
 
     foreach ($key in $navButtons.Keys) {
-        $navButtons[$key].Add_Click({ & $ShowSection -Key $key }.GetNewClosure())
+        $navButtons[$key].Add_Click({
+            # Administracao so abre mediante senha (pedida a cada entrada).
+            if ($key -eq "Admin") {
+                if (-not (Show-AdminPasswordDialog)) { return }
+                & $global:RefreshAdminLaps
+            }
+            & $ShowSection -Key $key
+        }.GetNewClosure())
     }
 
     # ---- Inicio (dashboard com atalhos) ----
@@ -6562,6 +6703,48 @@ function Show-MainWindow {
         Show-UninstallerDialog
     }.GetNewClosure())
     $window.FindName("BtnPegarSenhaLaps").Add_Click({ Invoke-LapsPasswordLookup }.GetNewClosure())
+
+    # ---- Administracao (protegida por senha): acesso da ferramenta LAPS ----
+    # Controles em $global: (closures aninhadas nao enxergam $script:).
+    $global:TxtAdminLapsStatus = $window.FindName("TxtAdminLapsStatus")
+    $global:TxtAdminLapsUser   = $window.FindName("TxtAdminLapsUser")
+    $global:PwdAdminLaps       = $window.FindName("PwdAdminLaps")
+    $global:RefreshAdminLaps = {
+        $ativa = Get-LapsActiveCredential
+        $origem = if ($ativa.Source -eq "Local") { "salva nesta maquina (aba Administracao)" } else { "padrao do codigo da ferramenta" }
+        $global:TxtAdminLapsStatus.Text = "Em uso agora: {0} - credencial {1}." -f $ativa.User,$origem
+        $global:TxtAdminLapsUser.Text = $ativa.User
+        $global:PwdAdminLaps.Clear()
+    }
+    $window.FindName("BtnAdminLapsSalvar").Add_Click({
+        $u = $global:TxtAdminLapsUser.Text.Trim()
+        $p = $global:PwdAdminLaps.Password
+        if ([string]::IsNullOrWhiteSpace($u) -or [string]::IsNullOrEmpty($p)) { Show-Warning "Informe login e senha."; return }
+        try {
+            $b64 = ConvertTo-LapsObfuscated -Plain $p
+            $dir = Split-Path -Parent $global:LapsCredFile
+            if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+            [PSCustomObject]@{ User=$u; PasswordB64=$b64 } | ConvertTo-Json | Out-File -LiteralPath $global:LapsCredFile -Encoding UTF8 -Force
+            $q = [string][char]39
+            $uq = $u.Replace($q, $q + $q)
+            $pq = $p.Replace($q, $q + $q)
+            $bloco = ('$global:LapsFixedUser        = ' + $q + $uq + $q) + "`r`n" + ('$global:LapsFixedPassword    = ' + $q + $pq + $q)
+            Set-Clipboard -Value $bloco
+            Write-Log -Message ("[ADMIN] Credencial do LAPS atualizada (login {0})." -f $u) -Level "SUCCESS"
+            & $global:RefreshAdminLaps
+            Show-TextResultDialog -Title "Credencial LAPS salva" -Text ("Salva e ativa NESTA maquina.`r`n`r`nPara valer para TODOS os tecnicos, substitua estas duas linhas no ServiceDeskTool.ps1 e publique a nova versao (ja copiadas para a area de transferencia):`r`n`r`n" + $bloco)
+        } catch {
+            Write-Log -Message ("[ADMIN] Falha ao salvar credencial do LAPS: {0}" -f $_.Exception.Message) -Level "ERROR"
+            Show-ErrorBox ("Nao foi possivel salvar a credencial.`n`n{0}" -f $_.Exception.Message)
+        }
+    }.GetNewClosure())
+    $window.FindName("BtnAdminLapsRemover").Add_Click({
+        try {
+            if (Test-Path -LiteralPath $global:LapsCredFile) { Remove-Item -LiteralPath $global:LapsCredFile -Force -ErrorAction Stop }
+            Write-Log -Message "[ADMIN] Credencial local do LAPS removida (volta a padrao do codigo)." -Level "INFO"
+            & $global:RefreshAdminLaps
+        } catch { Show-ErrorBox ("Nao foi possivel remover.`n`n{0}" -f $_.Exception.Message) }
+    }.GetNewClosure())
 
     # ---- Drivers ----
     $window.FindName("BtnScanDrivers").Add_Click({ Invoke-DriverScanTool }.GetNewClosure())
