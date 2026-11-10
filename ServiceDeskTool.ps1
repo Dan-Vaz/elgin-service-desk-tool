@@ -62,7 +62,7 @@ if ($PSCommandPath -and (Split-Path -Path $PSCommandPath -Leaf) -match '^elgin_r
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.55"
+$global:AppVersion    = "3.56"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -3510,7 +3510,7 @@ $script:XamlPanelsC = @'
                                         <Button x:Name="BtnAdminLapsSalvar" Content="Salvar" Height="32" Width="130" Style="{StaticResource CardButton}" Background="#F43F5E" Margin="0,0,10,0"/>
                                         <Button x:Name="BtnAdminLapsRemover" Content="Remover local" Height="32" Width="130" Style="{StaticResource CardButton}" Background="{DynamicResource BrushBorder}" Foreground="{DynamicResource BrushText}"/>
                                     </StackPanel>
-                                    <TextBlock Text="Ao salvar, a credencial vale NESTA maquina na hora. Para valer para todos os tecnicos, o valor gerado entra no codigo e a versao e publicada (o bloco pronto e copiado para a area de transferencia)." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,12,0,0"/>
+                                    <TextBlock Text="Ao salvar, voce confirma e a credencial e PUBLICADA para todos os tecnicos (repositorio + gist), valendo na proxima abertura da ferramenta. Requer Git instalado e logado no GitHub nesta maquina; sem isso ela fica so nesta maquina." Foreground="{DynamicResource BrushTextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,12,0,0"/>
                                 </StackPanel>
                             </Border>
                         </StackPanel>
@@ -5069,6 +5069,183 @@ function Get-LapsActiveCredential {
     }
     return [PSCustomObject]@{ User=$global:LapsFixedUser; Password=(Get-LapsFixedSecret); Source="Padrao" }
 }
+# Publicacao da credencial do LAPS para TODOS os tecnicos: roda na maquina do
+# administrador (aba Administracao), usa o git e o login do GitHub JA salvos ali
+# (Git Credential Manager) - nenhum token fica no codigo. Clona o repositorio e
+# o gist, troca so as duas linhas LapsFixedUser/LapsFixedPassword, valida a
+# sintaxe, faz commit + push nos dois e purga o jsDelivr uma vez. Roda em
+# processo filho (padrao "nao trava"); a senha segue por arquivo temporario,
+# nunca pela linha de comando (Invoke-ManagedProcess grava a linha no log).
+$global:LapsPublishRepoUrl    = "https://Dan-Vaz@github.com/Dan-Vaz/elgin-service-desk-tool.git"
+$global:LapsPublishRepoBranch = "master"
+$global:LapsPublishGistUrl    = "https://Dan-Vaz@gist.github.com/91cf3659c455bb69ff32e6c7cb99fa6d.git"
+$global:LapsPublishGistBranch = "main"
+$global:LapsPublishPurgeUrl   = "https://purge.jsdelivr.net/gh/Dan-Vaz/elgin-service-desk-tool@master/ServiceDeskTool.ps1"
+$script:LapsPublishChildScript = @'
+param([string]$PayloadFile)
+$ErrorActionPreference = "Continue"
+$p = Get-Content -LiteralPath $PayloadFile -Raw | ConvertFrom-Json
+Remove-Item -LiteralPath $PayloadFile -Force -ErrorAction SilentlyContinue
+$user = [string]$p.User
+$pw   = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$p.PasswordB64))
+$env:GIT_TERMINAL_PROMPT = "0"
+$env:GCM_INTERACTIVE     = "never"
+$work = Join-Path $env:TEMP ("elgin_laps_pub_" + [guid]::NewGuid().ToString("N"))
+function G {
+    $o = & git @args 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { throw ("git {0} falhou: {1}" -f $args[0], $o.Trim()) }
+    return $o
+}
+try {
+    if ($user -notmatch '^[\x21-\x7E]+$' -or $pw -notmatch '^[\x20-\x7E]+$') { throw "Login/senha precisam ter so caracteres ASCII imprimiveis." }
+    $q = [string][char]39
+    $newU = '$global:LapsFixedUser        = ' + $q + $user.Replace($q, $q + $q) + $q
+    $newP = '$global:LapsFixedPassword    = ' + $q + $pw.Replace($q, $q + $q) + $q
+    $targets = @(
+        @{ Name = "repositorio"; Url = [string]$p.RepoUrl; Branch = [string]$p.RepoBranch },
+        @{ Name = "gist";        Url = [string]$p.GistUrl; Branch = [string]$p.GistBranch }
+    )
+    # 1) clona e prepara os DOIS antes de empurrar qualquer um
+    foreach ($t in $targets) {
+        $t.Dir = Join-Path $work $t.Name
+        Write-Output ("[{0}] clonando..." -f $t.Name)
+        [void](G -c core.autocrlf=false clone --quiet --depth 1 --branch $t.Branch $t.Url $t.Dir)
+        $file = Join-Path $t.Dir "ServiceDeskTool.ps1"
+        $text = [IO.File]::ReadAllText($file, [Text.Encoding]::ASCII)
+        # ja esta com estes valores (mesmo que escritos com outra aspa)? entao nao ha o que publicar
+        $cur = @{}
+        $curAst = [System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$null, [ref]$null)
+        foreach ($a in $curAst.EndBlock.Statements) {
+            if ($a -is [System.Management.Automation.Language.AssignmentStatementAst] -and ($a.Left.Extent.Text -eq '$global:LapsFixedUser' -or $a.Left.Extent.Text -eq '$global:LapsFixedPassword')) { $cur[$a.Left.Extent.Text] = $a.Right.Expression.Value }
+        }
+        if ($cur['$global:LapsFixedUser'] -ceq $user -and $cur['$global:LapsFixedPassword'] -ceq $pw) { $t.Changed = $false; continue }
+        foreach ($pair in @(@('(?m)^\$global:LapsFixedUser\s*=[^\r\n]*', $newU), @('(?m)^\$global:LapsFixedPassword\s*=[^\r\n]*', $newP))) {
+            $ms = [regex]::Matches($text, $pair[0])
+            if ($ms.Count -ne 1) { throw ("[{0}] esperava 1 linha para {1}, achei {2}." -f $t.Name, $pair[0], $ms.Count) }
+            $text = $text.Substring(0, $ms[0].Index) + $pair[1] + $text.Substring($ms[0].Index + $ms[0].Length)
+        }
+        # valida: sintaxe OK e os valores gravados voltam identicos
+        $errs = $null; $toks = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$toks, [ref]$errs)
+        if ($errs.Count -gt 0) { throw ("[{0}] o arquivo editado ficou com erro de sintaxe: {1}" -f $t.Name, $errs[0].Message) }
+        $got = @{}
+        foreach ($a in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
+            if ($a.Left.Extent.Text -eq '$global:LapsFixedUser' -or $a.Left.Extent.Text -eq '$global:LapsFixedPassword') { $got[$a.Left.Extent.Text] = $a.Right.Expression.Value }
+        }
+        if ($got['$global:LapsFixedUser'] -cne $user -or $got['$global:LapsFixedPassword'] -cne $pw) { throw ("[{0}] os valores gravados nao conferem com os informados." -f $t.Name) }
+        $old = [IO.File]::ReadAllText($file, [Text.Encoding]::ASCII)
+        $t.Changed = ($text -cne $old)
+        if ($t.Changed) { [IO.File]::WriteAllText($file, $text, (New-Object Text.ASCIIEncoding)) }
+    }
+    # 2) commit + push (repositorio primeiro, depois o gist)
+    $pushed = @()
+    foreach ($t in $targets) {
+        if (-not $t.Changed) { Write-Output ("[{0}] ja estava com esta credencial." -f $t.Name); continue }
+        [void](G -C $t.Dir -c user.name="Elgin Service Desk" -c user.email="noreply@users.noreply.github.com" commit -q -am "LAPS: atualiza credencial (publicado pela aba Administracao)")
+        Write-Output ("[{0}] enviando..." -f $t.Name)
+        [void](G -C $t.Dir push --quiet origin $t.Branch)
+        $pushed += $t.Name
+        Write-Output ("[{0}] publicado." -f $t.Name)
+    }
+    # 3) purga o cache do jsDelivr UMA vez (so se o repositorio mudou)
+    $purge = "nao necessario"
+    if ($pushed -contains "repositorio" -and $p.PurgeUrl) {
+        try { $r = Invoke-RestMethod -Uri ([string]$p.PurgeUrl) -TimeoutSec 30; $purge = "status=" + $r.status } catch { $purge = "falhou: " + $_.Exception.Message }
+    }
+    if ($pushed.Count -eq 0) { Write-Output "RESULT=NOCHANGE" } else { Write-Output ("RESULT=OK published=" + ($pushed -join ",") + " purge=" + $purge) }
+} catch {
+    Write-Output ("RESULT=FAIL " + ($_.Exception.Message -replace '\s+', ' '))
+} finally {
+    Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+}
+'@
+
+function Publish-LapsCredential {
+    param(
+        [Parameter(Mandatory=$true)][string]$User,
+        [Parameter(Mandatory=$true)][string]$Password,
+        [string]$RepoUrl    = $global:LapsPublishRepoUrl,
+        [string]$RepoBranch = $global:LapsPublishRepoBranch,
+        [string]$GistUrl    = $global:LapsPublishGistUrl,
+        [string]$GistBranch = $global:LapsPublishGistBranch,
+        [string]$PurgeUrl   = $global:LapsPublishPurgeUrl
+    )
+    $payload = Join-Path $env:TEMP ("elgin_laps_payload_{0}.json" -f [guid]::NewGuid().ToString("N"))
+    $child   = Join-Path $env:TEMP ("elgin_laps_publish_{0}.ps1" -f [guid]::NewGuid().ToString("N"))
+    try {
+        [PSCustomObject]@{
+            User=$User; PasswordB64=(ConvertTo-LapsObfuscated -Plain $Password)
+            RepoUrl=$RepoUrl; RepoBranch=$RepoBranch; GistUrl=$GistUrl; GistBranch=$GistBranch; PurgeUrl=$PurgeUrl
+        } | ConvertTo-Json | Out-File -LiteralPath $payload -Encoding ASCII -Force
+        Set-Content -LiteralPath $child -Value $script:LapsPublishChildScript -Encoding ASCII
+        $r = Invoke-ManagedProcess -FilePath "powershell.exe" -Arguments @("-NoProfile","-ExecutionPolicy","Bypass","-File",$child,"-PayloadFile",$payload) -Description "[ADMIN] Publicar credencial do LAPS" -TimeoutSeconds 240 -BusyText "Publicando a credencial do LAPS para todos os tecnicos..."
+        $linha = @($r.Output -split "`r?`n" | Where-Object { $_ -match '^RESULT=' }) | Select-Object -Last 1
+        if (-not $linha) { return [PSCustomObject]@{ Status="FAIL"; Detail=("Sem resultado do processo (ExitCode {0}). {1}" -f $r.ExitCode,$r.Error); Output=$r.Output } }
+        $status = ($linha -replace '^RESULT=(\S+).*$','$1')
+        $detail = ($linha -replace '^RESULT=\S+\s*','')
+        return [PSCustomObject]@{ Status=$status; Detail=$detail; Output=$r.Output }
+    } finally {
+        foreach ($x in @($payload,$child)) { if (Test-Path -LiteralPath $x) { Remove-Item -LiteralPath $x -Force -ErrorAction SilentlyContinue } }
+    }
+}
+
+# Fluxo do botao Salvar da aba Administracao: confirma, publica para todos
+# (Publish-LapsCredential) e, se der certo, passa a usar o valor novo tambem
+# nesta sessao e descarta o arquivo local (senao uma copia local velha
+# esconderia as proximas trocas feitas por outra maquina). Se nao publicar
+# (recusou, sem git, sem login no GitHub, sem rede) a credencial fica so
+# nesta maquina e o bloco pronto vai para a area de transferencia.
+function Save-LapsLocalCredential {
+    param([string]$User,[string]$Password)
+    $dir = Split-Path -Parent $global:LapsCredFile
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    [PSCustomObject]@{ User=$User; PasswordB64=(ConvertTo-LapsObfuscated -Plain $Password) } | ConvertTo-Json | Out-File -LiteralPath $global:LapsCredFile -Encoding UTF8 -Force
+}
+function Save-LapsCredentialFromAdmin {
+    param([string]$User,[string]$Password)
+    if ([string]::IsNullOrWhiteSpace($User) -or [string]::IsNullOrEmpty($Password)) { Show-Warning "Informe login e senha."; return }
+    if ($User -notmatch '^[!-~]+$' -or $Password -notmatch '^[ -~]+$') {
+        Show-Warning "Login e senha so podem ter caracteres ASCII simples (sem acentos, sem espacos no login). O codigo da ferramenta e ASCII."
+        return
+    }
+    $q = [string][char]39
+    $bloco = ('$global:LapsFixedUser        = ' + $q + $User.Replace($q,$q+$q) + $q) + "`r`n" + ('$global:LapsFixedPassword    = ' + $q + $Password.Replace($q,$q+$q) + $q)
+    try {
+        $publicar = Confirm-Action ("Publicar esta credencial para TODOS os tecnicos?`n`nLogin: {0}`n`nA senha sera gravada em texto no repositorio e no gist (publicos) e passa a valer na proxima abertura da ferramenta em qualquer maquina. Requer Git instalado e logado no GitHub nesta maquina.`n`nSim = publicar para todos`nNao = salvar so nesta maquina" -f $User) "Publicar credencial do LAPS"
+        if ($publicar) {
+            if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+                Show-Warning "Git nao encontrado nesta maquina, entao nao da para publicar daqui. A credencial foi salva so nesta maquina; o bloco pronto foi copiado para a area de transferencia."
+                $publicar = $false
+            }
+        }
+        if ($publicar) {
+            Set-Status "Publicando a credencial do LAPS..."
+            $res = Publish-LapsCredential -User $User -Password $Password
+            if ($res.Status -eq "OK" -or $res.Status -eq "NOCHANGE") {
+                $global:LapsFixedUser = $User
+                $global:LapsFixedPassword = $Password
+                if (Test-Path -LiteralPath $global:LapsCredFile) { Remove-Item -LiteralPath $global:LapsCredFile -Force -ErrorAction SilentlyContinue }
+                Write-Log -Message ("[ADMIN] Credencial do LAPS publicada para todos (login {0}): {1} {2}" -f $User,$res.Status,$res.Detail) -Level "SUCCESS"
+                Set-Status "Credencial do LAPS publicada." "SUCCESS"
+                & $global:RefreshAdminLaps
+                $msg = if ($res.Status -eq "NOCHANGE") { "Esta credencial ja estava publicada; nada a enviar." } else { "Publicada no repositorio e no gist. Vale para todos na proxima vez que a ferramenta for aberta.`n`n" + $res.Detail }
+                Show-TextResultDialog -Title "Credencial LAPS publicada" -Text $msg
+                return
+            }
+            Write-Log -Message ("[ADMIN] Falha ao publicar credencial do LAPS: {0}" -f $res.Detail) -Level "ERROR"
+            Show-ErrorBox ("Nao foi possivel publicar para todos.`n`n{0}`n`nSe for autenticacao, rode uma vez neste PC: git credential-manager github login --browser`n`nA credencial foi salva so nesta maquina e o bloco pronto foi copiado para a area de transferencia." -f $res.Detail)
+        }
+        Save-LapsLocalCredential -User $User -Password $Password
+        Set-Clipboard -Value $bloco
+        Write-Log -Message ("[ADMIN] Credencial do LAPS salva so nesta maquina (login {0})." -f $User) -Level "SUCCESS"
+        & $global:RefreshAdminLaps
+        Show-TextResultDialog -Title "Credencial LAPS salva (so nesta maquina)" -Text ("Ativa NESTA maquina. Para valer para todos, substitua estas duas linhas no ServiceDeskTool.ps1 e publique (ja copiadas para a area de transferencia):`r`n`r`n" + $bloco)
+    } catch {
+        Write-Log -Message ("[ADMIN] Falha ao salvar credencial do LAPS: {0}" -f $_.Exception.Message) -Level "ERROR"
+        Show-ErrorBox ("Nao foi possivel salvar a credencial.`n`n{0}" -f $_.Exception.Message)
+    }
+}
+
 $script:LapsHostnameDialogXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -6717,26 +6894,7 @@ function Show-MainWindow {
         $global:PwdAdminLaps.Clear()
     }
     $window.FindName("BtnAdminLapsSalvar").Add_Click({
-        $u = $global:TxtAdminLapsUser.Text.Trim()
-        $p = $global:PwdAdminLaps.Password
-        if ([string]::IsNullOrWhiteSpace($u) -or [string]::IsNullOrEmpty($p)) { Show-Warning "Informe login e senha."; return }
-        try {
-            $b64 = ConvertTo-LapsObfuscated -Plain $p
-            $dir = Split-Path -Parent $global:LapsCredFile
-            if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-            [PSCustomObject]@{ User=$u; PasswordB64=$b64 } | ConvertTo-Json | Out-File -LiteralPath $global:LapsCredFile -Encoding UTF8 -Force
-            $q = [string][char]39
-            $uq = $u.Replace($q, $q + $q)
-            $pq = $p.Replace($q, $q + $q)
-            $bloco = ('$global:LapsFixedUser        = ' + $q + $uq + $q) + "`r`n" + ('$global:LapsFixedPassword    = ' + $q + $pq + $q)
-            Set-Clipboard -Value $bloco
-            Write-Log -Message ("[ADMIN] Credencial do LAPS atualizada (login {0})." -f $u) -Level "SUCCESS"
-            & $global:RefreshAdminLaps
-            Show-TextResultDialog -Title "Credencial LAPS salva" -Text ("Salva e ativa NESTA maquina.`r`n`r`nPara valer para TODOS os tecnicos, substitua estas duas linhas no ServiceDeskTool.ps1 e publique a nova versao (ja copiadas para a area de transferencia):`r`n`r`n" + $bloco)
-        } catch {
-            Write-Log -Message ("[ADMIN] Falha ao salvar credencial do LAPS: {0}" -f $_.Exception.Message) -Level "ERROR"
-            Show-ErrorBox ("Nao foi possivel salvar a credencial.`n`n{0}" -f $_.Exception.Message)
-        }
+        Save-LapsCredentialFromAdmin -User $global:TxtAdminLapsUser.Text.Trim() -Password $global:PwdAdminLaps.Password
     }.GetNewClosure())
     $window.FindName("BtnAdminLapsRemover").Add_Click({
         try {
