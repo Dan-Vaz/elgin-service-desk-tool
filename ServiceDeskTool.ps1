@@ -62,7 +62,7 @@ if ($PSCommandPath -and (Split-Path -Path $PSCommandPath -Leaf) -match '^elgin_r
 # CONFIGURACAO GLOBAL
 # ==============================================================================
 $global:AppName       = "Elgin Service Desk Tool"
-$global:AppVersion    = "3.57"
+$global:AppVersion    = "3.58"
 # Fonte usada quando a ferramenta roda SEM o .bat/.exe - por exemplo o tecnico
 # colando "irm https://tinyurl.com/elginsd | iex" direto no PowerShell. Nesse
 # caso ELGIN_SERVICE_DESK_URL nao existe e, sem este padrao, o
@@ -5054,23 +5054,17 @@ $global:LapsFixedPassword    = 'D@n0492119802'
 # arquivo (XOR) faz o Defender/AMSI bloquear o script inteiro como
 # VirTool:PowerShell/MaleficAms.M (confirmado em 2026-11-10 nas v3.52/v3.53).
 function Get-LapsFixedSecret { return $global:LapsFixedPassword }
-# Texto puro <-> base64, usado so no arquivo local salvo pela aba Administracao
-# (nao e criptografia).
-function ConvertTo-LapsObfuscated {
-    param([string]$Plain)
-    return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Plain))
-}
 # Credencial salva pela aba Administracao NESTA maquina (precedencia sobre a
-# embutida no codigo). Serve pra testar antes de publicar a versao nova; para
-# valer para todos os tecnicos o valor precisa ir pro codigo e ser publicado.
+# embutida no codigo). Usada quando nao deu para publicar para todos; arquivo
+# JSON simples em LOCALAPPDATA (sem codificacao: nada de base64/criptografia
+# neste script, que e o que cada tecnico executa ao abrir a ferramenta).
 $global:LapsCredFile = Join-Path $env:LOCALAPPDATA "ElginServiceDesk\laps_cred.json"
 function Get-LapsActiveCredential {
     try {
         if (Test-Path -LiteralPath $global:LapsCredFile) {
             $j = Get-Content -LiteralPath $global:LapsCredFile -Raw -ErrorAction Stop | ConvertFrom-Json
-            if ($j.User -and $j.PasswordB64) {
-                $pw = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$j.PasswordB64))
-                return [PSCustomObject]@{ User=[string]$j.User; Password=$pw; Source="Local" }
+            if ($j.User -and $j.Password) {
+                return [PSCustomObject]@{ User=[string]$j.User; Password=[string]$j.Password; Source="Local" }
             }
         }
     } catch {
@@ -5078,18 +5072,18 @@ function Get-LapsActiveCredential {
     }
     return [PSCustomObject]@{ User=$global:LapsFixedUser; Password=(Get-LapsFixedSecret); Source="Padrao" }
 }
-# Publicacao da credencial do LAPS para TODOS os tecnicos, a partir de QUALQUER
-# maquina (aba Administracao). Dois caminhos, escolhidos automaticamente:
-#  1) TOKEN do GitHub (colado na aba ou salvo neste computador): usa a API REST,
-#     NAO precisa de Git instalado. Le o ServiceDeskTool.ps1 do repositorio e do
-#     gist, troca so as linhas LapsFixedUser/LapsFixedPassword, valida a sintaxe
-#     e grava nos dois.
-#  2) Sem token, com Git instalado e logado no GitHub: clona, troca as linhas,
-#     faz push nos dois.
-# Nenhum token fica no codigo (o repositorio e publico: um token de escrita ali
-# deixaria qualquer pessoa trocar o script que todos os tecnicos executam).
-# Roda em processo filho (padrao "nao trava"); senha e token seguem por arquivo
-# temporario apagado pelo filho, nunca pela linha de comando (o log grava ela).
+
+# Publicacao da credencial do LAPS para TODOS os tecnicos, de QUALQUER maquina
+# (aba Administracao). Quem faz o trabalho e o LapsPublish.ps1, que fica FORA
+# deste arquivo de proposito: codigo que usa a API do GitHub com token, git e
+# edita o proprio script parece exfiltracao/supply-chain para um EDR
+# (CrowdStrike Falcon) - quando estava aqui dentro, o Falcon barrava o comando de
+# abertura de todos os tecnicos. Este arquivo so BAIXA o LapsPublish.ps1 quando um
+# administrador clica em Salvar e o roda num processo filho (padrao "nao trava").
+# A senha e o token seguem por arquivo temporario apagado pelo filho, nunca pela
+# linha de comando (Invoke-ManagedProcess grava a linha no log).
+# NUNCA embutir token do GitHub aqui: o repositorio e publico e um token de
+# escrita deixaria qualquer pessoa trocar o script que todos executam.
 $global:LapsPublishOwner      = "Dan-Vaz"
 $global:LapsPublishRepo       = "elgin-service-desk-tool"
 $global:LapsPublishRepoBranch = "master"
@@ -5099,229 +5093,70 @@ $global:LapsPublishApiBase    = "https://api.github.com"
 $global:LapsPublishRepoUrl    = "https://Dan-Vaz@github.com/Dan-Vaz/elgin-service-desk-tool.git"
 $global:LapsPublishGistUrl    = "https://Dan-Vaz@gist.github.com/91cf3659c455bb69ff32e6c7cb99fa6d.git"
 $global:LapsPublishPurgeUrl   = "https://purge.jsdelivr.net/gh/Dan-Vaz/elgin-service-desk-tool@master/ServiceDeskTool.ps1"
-# Token salvo neste computador (opcional): criptografado com DPAPI, so este
-# usuario do Windows nesta maquina consegue ler.
+$global:LapsPublishModuleUrls = @(
+    "https://raw.githubusercontent.com/Dan-Vaz/elgin-service-desk-tool/master/LapsPublish.ps1",
+    "https://cdn.jsdelivr.net/gh/Dan-Vaz/elgin-service-desk-tool@master/LapsPublish.ps1"
+)
+# So para o botao "Esquecer token" e o aviso na tela (existe ou nao); quem le e
+# grava o conteudo e o LapsPublish.ps1.
 $global:GitHubTokenFile = Join-Path $env:LOCALAPPDATA "ElginServiceDesk\gh_publish_token.dat"
 
-# Parte comum aos dois caminhos: le o payload, decodifica login/senha e sabe
-# trocar as duas linhas validando o resultado.
-$script:LapsPublishCommon = @'
-param([string]$PayloadFile)
-$ErrorActionPreference = "Continue"
-$p = Get-Content -LiteralPath $PayloadFile -Raw | ConvertFrom-Json
-Remove-Item -LiteralPath $PayloadFile -Force -ErrorAction SilentlyContinue
-$user = [string]$p.User
-$pw   = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$p.PasswordB64))
-$q = [string][char]39
-$newU = '$global:LapsFixedUser        = ' + $q + $user.Replace($q, $q + $q) + $q
-$newP = '$global:LapsFixedPassword    = ' + $q + $pw.Replace($q, $q + $q) + $q
-function Get-LapsValues {
-    param([string]$Text)
-    $h = @{}
-    $a = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$null, [ref]$null)
-    foreach ($s in $a.EndBlock.Statements) {
-        if ($s -is [System.Management.Automation.Language.AssignmentStatementAst] -and ($s.Left.Extent.Text -eq '$global:LapsFixedUser' -or $s.Left.Extent.Text -eq '$global:LapsFixedPassword')) {
-            $h[$s.Left.Extent.Text] = $s.Right.Expression.Value
-        }
-    }
-    return $h
-}
-# Devolve Changed=$false se o arquivo ja tem estes valores (mesmo escritos com
-# outra aspa); senao troca as duas linhas e confere sintaxe e valores.
-function Update-LapsText {
-    param([string]$Name,[string]$Text)
-    if ([regex]::IsMatch($Text, '[^\x00-\x7F]')) { throw ("[{0}] o arquivo tem caracteres nao-ASCII; abortei para nao corrompe-lo." -f $Name) }
-    $cur = Get-LapsValues -Text $Text
-    if ($cur['$global:LapsFixedUser'] -ceq $user -and $cur['$global:LapsFixedPassword'] -ceq $pw) {
-        return [PSCustomObject]@{ Changed = $false; Text = $Text }
-    }
-    foreach ($pair in @(@('(?m)^\$global:LapsFixedUser\s*=[^\r\n]*', $newU), @('(?m)^\$global:LapsFixedPassword\s*=[^\r\n]*', $newP))) {
-        $ms = [regex]::Matches($Text, $pair[0])
-        if ($ms.Count -ne 1) { throw ("[{0}] esperava 1 linha para {1}, achei {2}." -f $Name, $pair[0], $ms.Count) }
-        $Text = $Text.Substring(0, $ms[0].Index) + $pair[1] + $Text.Substring($ms[0].Index + $ms[0].Length)
-    }
-    $errs = $null; $toks = $null
-    $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$toks, [ref]$errs)
-    if ($errs.Count -gt 0) { throw ("[{0}] o arquivo editado ficou com erro de sintaxe: {1}" -f $Name, $errs[0].Message) }
-    $got = Get-LapsValues -Text $Text
-    if ($got['$global:LapsFixedUser'] -cne $user -or $got['$global:LapsFixedPassword'] -cne $pw) { throw ("[{0}] os valores gravados nao conferem com os informados." -f $Name) }
-    return [PSCustomObject]@{ Changed = $true; Text = $Text }
-}
-function Test-LapsInput {
-    if ($user -notmatch '^[\x21-\x7E]+$' -or $pw -notmatch '^[\x20-\x7E]+$') { throw "Login/senha precisam ter so caracteres ASCII imprimiveis." }
-}
-function Invoke-LapsPurge {
-    param([bool]$RepoChanged)
-    if ($RepoChanged -and $p.PurgeUrl) {
-        try { $r = Invoke-RestMethod -Uri ([string]$p.PurgeUrl) -TimeoutSec 30; return ("status=" + $r.status) } catch { return ("falhou: " + $_.Exception.Message) }
-    }
-    return "nao necessario"
-}
-'@
-
-# Caminho 2: Git local.
-$script:LapsPublishGitBody = @'
-$env:GIT_TERMINAL_PROMPT = "0"
-$env:GCM_INTERACTIVE     = "never"
-$work = Join-Path $env:TEMP ("elgin_laps_pub_" + [guid]::NewGuid().ToString("N"))
-function G {
-    $o = & git @args 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) { throw ("git {0} falhou: {1}" -f $args[0], $o.Trim()) }
-    return $o
-}
-try {
-    Test-LapsInput
-    $targets = @(
-        @{ Name = "repositorio"; Url = [string]$p.RepoUrl; Branch = [string]$p.RepoBranch },
-        @{ Name = "gist";        Url = [string]$p.GistUrl; Branch = [string]$p.GistBranch }
-    )
-    # clona e prepara os DOIS antes de empurrar qualquer um
-    foreach ($t in $targets) {
-        $t.Dir = Join-Path $work $t.Name
-        Write-Output ("[{0}] clonando..." -f $t.Name)
-        [void](G -c core.autocrlf=false clone --quiet --depth 1 --branch $t.Branch $t.Url $t.Dir)
-        $file = Join-Path $t.Dir "ServiceDeskTool.ps1"
-        $u = Update-LapsText -Name $t.Name -Text ([IO.File]::ReadAllText($file, [Text.Encoding]::GetEncoding(28591)))
-        $t.Changed = $u.Changed
-        if ($u.Changed) { [IO.File]::WriteAllText($file, $u.Text, [Text.Encoding]::GetEncoding(28591)) }
-    }
-    $pushed = @()
-    foreach ($t in $targets) {
-        if (-not $t.Changed) { Write-Output ("[{0}] ja estava com esta credencial." -f $t.Name); continue }
-        [void](G -C $t.Dir -c user.name="Elgin Service Desk" -c user.email="noreply@users.noreply.github.com" commit -q -am "LAPS: atualiza credencial (publicado pela aba Administracao)")
-        Write-Output ("[{0}] enviando..." -f $t.Name)
-        [void](G -C $t.Dir push --quiet origin $t.Branch)
-        $pushed += $t.Name
-        Write-Output ("[{0}] publicado." -f $t.Name)
-    }
-    $purge = Invoke-LapsPurge -RepoChanged ($pushed -contains "repositorio")
-    if ($pushed.Count -eq 0) { Write-Output "RESULT=NOCHANGE" } else { Write-Output ("RESULT=OK published=" + ($pushed -join ",") + " purge=" + $purge) }
-} catch {
-    Write-Output ("RESULT=FAIL " + ($_.Exception.Message -replace '\s+', ' '))
-} finally {
-    Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
-}
-'@
-
-# Caminho 1: API REST do GitHub com token (sem Git).
-$script:LapsPublishApiBody = @'
-try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
-$latin1 = [Text.Encoding]::GetEncoding(28591)
-function Invoke-GhApi {
-    param([string]$Method,[string]$Url,$Body)
-    $h = @{ Authorization = ("Bearer " + [string]$p.Token); Accept = "application/vnd.github+json"; "X-GitHub-Api-Version" = "2022-11-28" }
-    $a = @{ Method = $Method; Uri = $Url; Headers = $h; UserAgent = "ElginServiceDesk"; TimeoutSec = 90; UseBasicParsing = $true }
-    if ($Body -ne $null) {
-        $a["Body"] = [Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Depth 6 -Compress))
-        $a["ContentType"] = "application/json"
-    }
-    try { return Invoke-RestMethod @a }
-    catch {
-        $code = 0
-        try { $code = [int]$_.Exception.Response.StatusCode } catch {}
-        if ($code -eq 401) { throw "Token do GitHub invalido ou expirado (401)." }
-        if ($code -eq 403 -or $code -eq 404) { throw ("O GitHub recusou o acesso ({0}). O token precisa das permissoes public_repo e gist e ser da conta dona do repositorio e do gist." -f $code) }
-        if ($code -eq 409 -or $code -eq 422) { throw ("O arquivo mudou no GitHub enquanto era editado ({0}). Salve de novo." -f $code) }
-        throw ("Falha na API do GitHub ({0}): {1}" -f $code, $_.Exception.Message)
-    }
-}
-try {
-    Test-LapsInput
-    $base = [string]$p.ApiBase
-    $rurl = "{0}/repos/{1}/{2}/contents/ServiceDeskTool.ps1" -f $base, $p.Owner, $p.Repo
-    Write-Output "[repositorio] lendo..."
-    $rf = Invoke-GhApi -Method GET -Url ($rurl + "?ref=" + [uri]::EscapeDataString([string]$p.RepoBranch))
-    $rb = [Convert]::FromBase64String(([string]$rf.content -replace '\s', ''))
-    if ($rb.Length -lt 1000) { throw "[repositorio] conteudo do arquivo veio vazio ou truncado." }
-    $ru = Update-LapsText -Name "repositorio" -Text ($latin1.GetString($rb))
-    Write-Output "[gist] lendo..."
-    $g = Invoke-GhApi -Method GET -Url ("{0}/gists/{1}" -f $base, $p.GistId)
-    $gf = $g.files.'ServiceDeskTool.ps1'
-    if (-not $gf) { throw "[gist] o gist nao tem ServiceDeskTool.ps1." }
-    $gtext = [string]$gf.content
-    if ($gf.truncated) {
-        $gtext = [string](Invoke-RestMethod -Uri ([string]$gf.raw_url) -Headers @{ Authorization = ("Bearer " + [string]$p.Token) } -UserAgent "ElginServiceDesk" -TimeoutSec 90)
-    }
-    if ($gtext.Length -lt 1000) { throw "[gist] conteudo do arquivo veio vazio ou truncado." }
-    $gu = Update-LapsText -Name "gist" -Text $gtext
-    $pushed = @()
-    if ($ru.Changed) {
-        Write-Output "[repositorio] enviando..."
-        [void](Invoke-GhApi -Method PUT -Url $rurl -Body @{
-            message = "LAPS: atualiza credencial (publicado pela aba Administracao)"
-            content = [Convert]::ToBase64String($latin1.GetBytes($ru.Text))
-            sha     = [string]$rf.sha
-            branch  = [string]$p.RepoBranch
-        })
-        $pushed += "repositorio"
-        Write-Output "[repositorio] publicado."
-    } else { Write-Output "[repositorio] ja estava com esta credencial." }
-    if ($gu.Changed) {
-        Write-Output "[gist] enviando..."
+# Baixa o LapsPublish.ps1 para $Dest. $ModuleSource (caminho local ou URL) so
+# existe para teste; em uso normal tenta as URLs padrao em ordem.
+function Get-LapsPublishModule {
+    param([string]$Dest,[string]$ModuleSource="")
+    $fontes = if ($ModuleSource) { @($ModuleSource) } else { @($global:LapsPublishModuleUrls) }
+    $ultimoErro = ""
+    foreach ($src in $fontes) {
         try {
-            [void](Invoke-GhApi -Method PATCH -Url ("{0}/gists/{1}" -f $base, $p.GistId) -Body @{ files = @{ "ServiceDeskTool.ps1" = @{ content = $gu.Text } } })
-        } catch {
-            if ($pushed.Count -gt 0) { throw ("O repositorio JA foi atualizado, mas o gist falhou: " + $_.Exception.Message) }
-            throw
-        }
-        $pushed += "gist"
-        Write-Output "[gist] publicado."
-    } else { Write-Output "[gist] ja estava com esta credencial." }
-    $purge = Invoke-LapsPurge -RepoChanged ($pushed -contains "repositorio")
-    if ($pushed.Count -eq 0) { Write-Output "RESULT=NOCHANGE" } else { Write-Output ("RESULT=OK published=" + ($pushed -join ",") + " purge=" + $purge) }
-} catch {
-    Write-Output ("RESULT=FAIL " + ($_.Exception.Message -replace '\s+', ' '))
-}
-'@
-
-function Get-StoredGitHubToken {
-    try {
-        if (Test-Path -LiteralPath $global:GitHubTokenFile) {
-            $sec = (Get-Content -LiteralPath $global:GitHubTokenFile -Raw -ErrorAction Stop).Trim() | ConvertTo-SecureString -ErrorAction Stop
-            return (New-Object System.Management.Automation.PSCredential("gh", $sec)).GetNetworkCredential().Password
-        }
-    } catch {
-        Write-Log -Message "[ADMIN] Token do GitHub salvo esta ilegivel (talvez de outro usuario/maquina); ignorando." -Level "WARN"
+            if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination $Dest -Force }
+            else { Invoke-WebRequest -Uri $src -OutFile $Dest -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop }
+            $txt = Get-Content -LiteralPath $Dest -Raw -ErrorAction Stop
+            if ($txt.Length -gt 1000 -and $txt -match 'publicador da credencial do LAPS') { return $true }
+            $ultimoErro = "arquivo baixado nao e o publicador"
+        } catch { $ultimoErro = $_.Exception.Message }
     }
-    return ""
+    Write-Log -Message ("[ADMIN] Nao foi possivel obter o LapsPublish.ps1: {0}" -f $ultimoErro) -Level "ERROR"
+    return $false
 }
-function Save-StoredGitHubToken {
-    param([string]$Token)
-    $dir = Split-Path -Parent $global:GitHubTokenFile
-    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    (ConvertTo-SecureString -String $Token -AsPlainText -Force | ConvertFrom-SecureString) | Out-File -LiteralPath $global:GitHubTokenFile -Encoding ASCII -Force
+
+function Invoke-LapsPublisher {
+    param([hashtable]$Payload,[string]$BusyText,[string]$ModuleSource="")
+    $payloadFile = Join-Path $env:TEMP ("elgin_laps_payload_{0}.json" -f [guid]::NewGuid().ToString("N"))
+    $child       = Join-Path $env:TEMP ("elgin_laps_publish_{0}.ps1" -f [guid]::NewGuid().ToString("N"))
+    try {
+        if (-not (Get-LapsPublishModule -Dest $child -ModuleSource $ModuleSource)) {
+            return [PSCustomObject]@{ Status="FAIL"; Detail="Nao consegui baixar o publicador (LapsPublish.ps1). Verifique a internet e tente de novo."; Output="" }
+        }
+        $Payload | ConvertTo-Json | Out-File -LiteralPath $payloadFile -Encoding UTF8 -Force
+        $r = Invoke-ManagedProcess -FilePath "powershell.exe" -Arguments @("-NoProfile","-ExecutionPolicy","Bypass","-File",$child,"-PayloadFile",$payloadFile) -Description "[ADMIN] Credencial do LAPS" -TimeoutSeconds 240 -BusyText $BusyText
+        $linha = @($r.Output -split "`r?`n" | Where-Object { $_ -match '^RESULT=' }) | Select-Object -Last 1
+        if (-not $linha) { return [PSCustomObject]@{ Status="FAIL"; Detail=("Sem resultado do processo (ExitCode {0}). {1}" -f $r.ExitCode,$r.Error); Output=$r.Output } }
+        return [PSCustomObject]@{ Status=($linha -replace '^RESULT=(\S+).*$','$1'); Detail=($linha -replace '^RESULT=\S+\s*',''); Output=$r.Output }
+    } finally {
+        foreach ($x in @($payloadFile,$child)) { if (Test-Path -LiteralPath $x) { Remove-Item -LiteralPath $x -Force -ErrorAction SilentlyContinue } }
+    }
 }
 
 function Publish-LapsCredential {
     param(
         [Parameter(Mandatory=$true)][string]$User,
         [Parameter(Mandatory=$true)][string]$Password,
-        [string]$Token      = "",
-        [string]$ApiBase    = $global:LapsPublishApiBase,
-        [string]$RepoUrl    = $global:LapsPublishRepoUrl,
-        [string]$GistUrl    = $global:LapsPublishGistUrl,
-        [string]$PurgeUrl   = $global:LapsPublishPurgeUrl
+        [string]$Token = "",
+        [bool]$RememberToken = $false,
+        [string]$ApiBase  = $global:LapsPublishApiBase,
+        [string]$RepoUrl  = $global:LapsPublishRepoUrl,
+        [string]$GistUrl  = $global:LapsPublishGistUrl,
+        [string]$PurgeUrl = $global:LapsPublishPurgeUrl,
+        [string]$ModuleSource = ""
     )
-    $payload = Join-Path $env:TEMP ("elgin_laps_payload_{0}.json" -f [guid]::NewGuid().ToString("N"))
-    $child   = Join-Path $env:TEMP ("elgin_laps_publish_{0}.ps1" -f [guid]::NewGuid().ToString("N"))
-    try {
-        [PSCustomObject]@{
-            User=$User; PasswordB64=(ConvertTo-LapsObfuscated -Plain $Password); Token=$Token
-            ApiBase=$ApiBase; Owner=$global:LapsPublishOwner; Repo=$global:LapsPublishRepo
-            RepoBranch=$global:LapsPublishRepoBranch; GistId=$global:LapsPublishGistId; GistBranch=$global:LapsPublishGistBranch
-            RepoUrl=$RepoUrl; GistUrl=$GistUrl; PurgeUrl=$PurgeUrl
-        } | ConvertTo-Json | Out-File -LiteralPath $payload -Encoding ASCII -Force
-        $corpo = if ($Token) { $script:LapsPublishApiBody } else { $script:LapsPublishGitBody }
-        Set-Content -LiteralPath $child -Value ($script:LapsPublishCommon + "`r`n" + $corpo) -Encoding ASCII
-        $r = Invoke-ManagedProcess -FilePath "powershell.exe" -Arguments @("-NoProfile","-ExecutionPolicy","Bypass","-File",$child,"-PayloadFile",$payload) -Description "[ADMIN] Publicar credencial do LAPS" -TimeoutSeconds 240 -BusyText "Publicando a credencial do LAPS para todos os tecnicos..."
-        $linha = @($r.Output -split "`r?`n" | Where-Object { $_ -match '^RESULT=' }) | Select-Object -Last 1
-        if (-not $linha) { return [PSCustomObject]@{ Status="FAIL"; Detail=("Sem resultado do processo (ExitCode {0}). {1}" -f $r.ExitCode,$r.Error); Output=$r.Output } }
-        $status = ($linha -replace '^RESULT=(\S+).*$','$1')
-        $detail = ($linha -replace '^RESULT=\S+\s*','')
-        return [PSCustomObject]@{ Status=$status; Detail=$detail; Output=$r.Output }
-    } finally {
-        foreach ($x in @($payload,$child)) { if (Test-Path -LiteralPath $x) { Remove-Item -LiteralPath $x -Force -ErrorAction SilentlyContinue } }
+    $payload = @{
+        Action="Publish"; User=$User; Password=$Password; Token=$Token; RememberToken=$RememberToken
+        ApiBase=$ApiBase; Owner=$global:LapsPublishOwner; Repo=$global:LapsPublishRepo
+        RepoBranch=$global:LapsPublishRepoBranch; GistId=$global:LapsPublishGistId; GistBranch=$global:LapsPublishGistBranch
+        RepoUrl=$RepoUrl; GistUrl=$GistUrl; PurgeUrl=$PurgeUrl
     }
+    return (Invoke-LapsPublisher -Payload $payload -BusyText "Publicando a credencial do LAPS para todos os tecnicos..." -ModuleSource $ModuleSource)
 }
 
 # Fluxo do botao Salvar da aba Administracao: confirma, publica para todos
@@ -5334,7 +5169,7 @@ function Save-LapsLocalCredential {
     param([string]$User,[string]$Password)
     $dir = Split-Path -Parent $global:LapsCredFile
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    [PSCustomObject]@{ User=$User; PasswordB64=(ConvertTo-LapsObfuscated -Plain $Password) } | ConvertTo-Json | Out-File -LiteralPath $global:LapsCredFile -Encoding UTF8 -Force
+    [PSCustomObject]@{ User=$User; Password=$Password } | ConvertTo-Json | Out-File -LiteralPath $global:LapsCredFile -Encoding UTF8 -Force
 }
 function Save-LapsCredentialFromAdmin {
     param([string]$User,[string]$Password,[string]$Token="",[bool]$RememberToken=$false)
@@ -5345,12 +5180,12 @@ function Save-LapsCredentialFromAdmin {
     }
     $Token = $Token.Trim()
     if ($Token -and $Token -notmatch '^[A-Za-z0-9_]{20,}$') { Show-Warning "O token do GitHub parece invalido (so letras, numeros e _). Cole de novo."; return }
-    $tokenUsado = if ($Token) { $Token } else { Get-StoredGitHubToken }
+    $temToken = [bool]$Token -or (Test-Path -LiteralPath $global:GitHubTokenFile)
     $temGit = [bool](Get-Command git -ErrorAction SilentlyContinue)
     $q = [string][char]39
     $bloco = ('$global:LapsFixedUser        = ' + $q + $User.Replace($q,$q+$q) + $q) + "`r`n" + ('$global:LapsFixedPassword    = ' + $q + $Password.Replace($q,$q+$q) + $q)
     try {
-        $via = if ($tokenUsado) { "pela API do GitHub, com o token" } elseif ($temGit) { "pelo Git desta maquina" } else { "" }
+        $via = if ($temToken) { "pela API do GitHub, com o token" } elseif ($temGit) { "pelo Git desta maquina" } else { "" }
         $publicar = $false
         if ($via) {
             $publicar = Confirm-Action ("Publicar esta credencial para TODOS os tecnicos?`n`nLogin: {0}`nCaminho: {1}`n`nA senha sera gravada em texto no repositorio e no gist (publicos) e passa a valer na proxima abertura da ferramenta em qualquer maquina.`n`nSim = publicar para todos`nNao = salvar so nesta maquina" -f $User,$via) "Publicar credencial do LAPS"
@@ -5359,9 +5194,8 @@ function Save-LapsCredentialFromAdmin {
         }
         if ($publicar) {
             Set-Status "Publicando a credencial do LAPS..."
-            $res = Publish-LapsCredential -User $User -Password $Password -Token $tokenUsado
+            $res = Publish-LapsCredential -User $User -Password $Password -Token $Token -RememberToken $RememberToken
             if ($res.Status -eq "OK" -or $res.Status -eq "NOCHANGE") {
-                if ($Token -and $RememberToken) { try { Save-StoredGitHubToken -Token $Token } catch { Write-Log -Message ("[ADMIN] Nao foi possivel salvar o token: {0}" -f $_.Exception.Message) -Level "WARN" } }
                 $global:LapsFixedUser = $User
                 $global:LapsFixedPassword = $Password
                 if (Test-Path -LiteralPath $global:LapsCredFile) { Remove-Item -LiteralPath $global:LapsCredFile -Force -ErrorAction SilentlyContinue }
